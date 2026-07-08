@@ -1,0 +1,127 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build_and_deploy:
+    name: Build package and deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: fileinfo, mbstring, xml, gd, zip, pdo_sqlsrv, sqlsrv
+          ini-values: post_max_size=256M, max_execution_time=180
+          tools: composer:v2
+
+      # 1. Cache Composer dependencies
+      - name: Get Composer Cache Directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
+
+      - name: Install Composer Dependencies
+        run: composer install --no-dev --optimize-autoloader
+
+      # 2. Cache NPM dependencies
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install NPM Dependencies & Build
+        run: |
+          npm ci
+          npm run build
+          # CRITICAL: Remove node_modules after build to keep the deployment package small
+          rm -rf node_modules
+
+      - name: Create Storage Link
+        run: php artisan storage:link
+
+      - name: Create deployment zip
+        run: |
+          zip -r release.zip . -x "*.git*" -x "node_modules/*" -x "tests/*" -x "resources/js/*" -x "resources/css/*" -x "storage/framework/cache/data/*" -x "storage/logs/*"
+
+      # 3a. Deploy build assets — always clean-slate so stale hashed filenames don't linger
+      - name: Normalize FTP server
+        id: ftp-server
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+        run: |
+          server="${FTP_SERVER}"
+          server="${server#ftp://}"
+          server="${server#ftps://}"
+          server="${server%%/*}"
+          server="${server%%:*}"
+          server="$(echo "$server" | xargs)"
+
+          if [ -z "$server" ]; then
+            echo "FTP_SERVER is empty after normalization. Check the GitHub Actions secret."
+            exit 1
+          fi
+
+          echo "::add-mask::$server"
+          echo "server=$server" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy Build Assets
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.4
+        with:
+          server: ${{ steps.ftp-server.outputs.server }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          protocol: ftps
+          port: 21
+          timeout: 120000
+          local-dir: ./public/build/
+          server-dir: /site/wwwroot/public/build/
+          dangerous-clean-slate: true
+
+      # 3b. Deploy the rest of the application
+      - name: Deploy Application
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.4
+        with:
+          server: ${{ steps.ftp-server.outputs.server }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          protocol: ftps
+          port: 21
+          timeout: 120000
+          server-dir: /site/wwwroot/
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
+            **/tests/**
+            **/resources/js/**
+            **/resources/css/**
+            **/storage/logs/**
+            **/storage/framework/cache/data/**
+            **/public/build/**
+            **/public/images/favicon_96x96.ico
+            README.md
+            release.zip
+
+      # - name: Run Migrations
+      #   run: php artisan migrate --force
+
+      # - name: Seed Roles and Permissions
+      #   run: php artisan db:seed --class=RolesAndPermissionSeeder --force
