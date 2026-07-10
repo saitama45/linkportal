@@ -7,6 +7,8 @@ import { useToast } from '@/Composables/useToast.js';
 import { useConfirm } from '@/Composables/useConfirm.js';
 import {
     ArrowLeftOnRectangleIcon,
+    ArrowUpTrayIcon,
+    BanknotesIcon,
     Bars3Icon,
     ChevronDownIcon,
     ClipboardDocumentListIcon,
@@ -42,6 +44,8 @@ const nav = [
     { label: 'Invoices', route: 'vendor.invoices.index', active: 'vendor.invoices.*', icon: ReceiptPercentIcon },
     { label: 'Purchase Orders', route: 'vendor.purchase-orders.index', active: 'vendor.purchase-orders.*', icon: ClipboardDocumentListIcon },
     { label: 'Quotations', route: 'vendor.quotations.index', active: 'vendor.quotations.*', icon: DocumentTextIcon },
+    { label: 'Uploads', route: 'vendor.document-uploads.index', active: 'vendor.document-uploads.*', icon: ArrowUpTrayIcon },
+    { label: 'Payments', route: 'vendor.accounts-payable.index', active: 'vendor.accounts-payable.*', icon: BanknotesIcon },
     { label: 'Documents', route: 'vendor.documents.index', active: 'vendor.documents.*', icon: DocumentTextIcon },
 ];
 

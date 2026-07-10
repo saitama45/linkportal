@@ -232,6 +232,16 @@ const sidebarPermissionMap = [
         ],
     },
     {
+        label: 'Document Processing',
+        description: 'OCR intake, templates, exception handling, and AP visibility.',
+        children: [
+            { category: 'Document Intake', label: 'Document Intake' },
+            { category: 'Document Templates', label: 'OCR Templates' },
+            { category: 'Document Exceptions', label: 'Document Exceptions' },
+            { category: 'Accounts Payable', label: 'Accounts Payable' },
+        ],
+    },
+    {
         label: 'Management',
         description: 'Administrative records shown under the Management sidebar menu.',
         children: [

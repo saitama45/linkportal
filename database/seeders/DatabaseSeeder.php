@@ -11,6 +11,7 @@ class DatabaseSeeder extends Seeder
         $this->call([
             RolesAndPermissionSeeder::class,
             PortalReferenceSeeder::class,
+            DocumentExceptionRuleSeeder::class,
         ]);
     }
 }

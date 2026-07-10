@@ -7,9 +7,13 @@ import {
     BuildingStorefrontIcon,
     CheckBadgeIcon,
     ChevronDownIcon,
+    BanknotesIcon,
     ClipboardDocumentListIcon,
     CubeIcon,
+    DocumentMagnifyingGlassIcon,
     DocumentTextIcon,
+    ExclamationTriangleIcon,
+    InboxArrowDownIcon,
     IdentificationIcon,
     LinkIcon,
     ReceiptPercentIcon,
@@ -30,6 +34,7 @@ const { hasPermission } = usePermission();
 const managementOpen = ref(true);
 const vendorsOpen = ref(true);
 const transactionsOpen = ref(true);
+const documentsOpen = ref(true);
 
 const isActive = (...patterns) => patterns.some((pattern) => route().current(pattern));
 
@@ -156,6 +161,60 @@ const iconClass = [
                         >
                             <DocumentTextIcon :class="isCollapsed ? 'mx-auto h-5 w-5' : 'mr-3 h-4 w-4'" />
                             <span v-if="!isCollapsed" class="text-xs font-semibold">Quotations</span>
+                        </Link>
+                    </div>
+                </div>
+
+                <!-- Document Processing group (OCR intake) -->
+                <div
+                    v-if="hasPermission('document-intake.view') || hasPermission('document-templates.view') || hasPermission('document-exceptions.view') || hasPermission('accounts-payable.view')"
+                    class="mt-6"
+                >
+                    <button
+                        type="button"
+                        class="group flex w-full items-center rounded-lg px-3 py-2.5 text-emerald-50/55 transition hover:bg-white/5 hover:text-white"
+                        @click="documentsOpen = !documentsOpen"
+                    >
+                        <InboxArrowDownIcon :class="iconClass" />
+                        <span v-if="!isCollapsed" class="flex-1 text-left text-sm font-semibold">Document Processing</span>
+                        <ChevronDownIcon
+                            v-if="!isCollapsed"
+                            :class="['h-4 w-4 transition', documentsOpen ? 'rotate-180' : '']"
+                        />
+                    </button>
+
+                    <div v-if="documentsOpen || isCollapsed" class="mt-1 space-y-1" :class="isCollapsed ? '' : 'pl-4'">
+                        <Link
+                            v-if="hasPermission('document-intake.view')"
+                            :href="route('document-intake.index')"
+                            :class="linkClass(isActive('document-intake.*'))"
+                        >
+                            <InboxArrowDownIcon :class="isCollapsed ? 'mx-auto h-5 w-5' : 'mr-3 h-4 w-4'" />
+                            <span v-if="!isCollapsed" class="text-xs font-semibold">Document Intake</span>
+                        </Link>
+                        <Link
+                            v-if="hasPermission('document-templates.view')"
+                            :href="route('document-templates.index')"
+                            :class="linkClass(isActive('document-templates.*'))"
+                        >
+                            <DocumentMagnifyingGlassIcon :class="isCollapsed ? 'mx-auto h-5 w-5' : 'mr-3 h-4 w-4'" />
+                            <span v-if="!isCollapsed" class="text-xs font-semibold">OCR Templates</span>
+                        </Link>
+                        <Link
+                            v-if="hasPermission('document-exceptions.view')"
+                            :href="route('document-exceptions.index')"
+                            :class="linkClass(isActive('document-exceptions.*'))"
+                        >
+                            <ExclamationTriangleIcon :class="isCollapsed ? 'mx-auto h-5 w-5' : 'mr-3 h-4 w-4'" />
+                            <span v-if="!isCollapsed" class="text-xs font-semibold">Exceptions</span>
+                        </Link>
+                        <Link
+                            v-if="hasPermission('accounts-payable.view')"
+                            :href="route('accounts-payable.index')"
+                            :class="linkClass(isActive('accounts-payable.*'))"
+                        >
+                            <BanknotesIcon :class="isCollapsed ? 'mx-auto h-5 w-5' : 'mr-3 h-4 w-4'" />
+                            <span v-if="!isCollapsed" class="text-xs font-semibold">Accounts Payable</span>
                         </Link>
                     </div>
                 </div>

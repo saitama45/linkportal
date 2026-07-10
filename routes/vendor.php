@@ -4,6 +4,7 @@ use App\Http\Controllers\Vendor\Auth\AuthController;
 use App\Http\Controllers\Vendor\BankAccountController;
 use App\Http\Controllers\Vendor\DashboardController;
 use App\Http\Controllers\Vendor\DocumentController;
+use App\Http\Controllers\Vendor\DocumentUploadController;
 use App\Http\Controllers\Vendor\InvoiceController;
 use App\Http\Controllers\Vendor\NotificationController;
 use App\Http\Controllers\Vendor\ProfileController;
@@ -45,6 +46,15 @@ Route::prefix('vendor')->name('vendor.')->group(function () {
 
         // Transactions require a fully active (approved) vendor account
         Route::middleware('vendor.active')->group(function () {
+            // OCR document intake (upload instead of encoding)
+            Route::get('accounts-payable', [\App\Http\Controllers\Vendor\AccountsPayableController::class, 'index'])->name('accounts-payable.index');
+
+            Route::get('document-uploads', [DocumentUploadController::class, 'index'])->name('document-uploads.index');
+            Route::get('document-uploads/create', [DocumentUploadController::class, 'create'])->name('document-uploads.create');
+            Route::post('document-uploads', [DocumentUploadController::class, 'store'])->name('document-uploads.store');
+            Route::get('document-uploads/{documentUpload}', [DocumentUploadController::class, 'show'])->name('document-uploads.show');
+            Route::put('document-uploads/{documentUpload}/cancel', [DocumentUploadController::class, 'cancel'])->name('document-uploads.cancel');
+
             Route::post('purchase-orders/{purchaseOrder}/acknowledge', [PurchaseOrderController::class, 'acknowledge'])
                 ->name('purchase-orders.acknowledge');
 

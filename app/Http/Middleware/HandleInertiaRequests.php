@@ -38,7 +38,9 @@ class HandleInertiaRequests extends Middleware
      */
     public function share(Request $request): array
     {
-        $user = $request->user();
+        // Explicit guard: the default guard can be switched (e.g. actingAs in
+        // tests), and this block only makes sense for internal users
+        $user = $request->user('web');
         $permissions = [];
 
         if ($user) {

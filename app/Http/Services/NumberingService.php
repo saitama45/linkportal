@@ -11,6 +11,7 @@ class NumberingService
         'purchase_order' => 'PO',
         'quotation' => 'QTN',
         'vendor' => 'VND',
+        'intake_document' => 'DOC',
     ];
 
     /**

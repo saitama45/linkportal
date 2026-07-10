@@ -35,4 +35,14 @@ return [
         ],
     ],
 
+    'ocr' => [
+        'base_url' => env('OCR_SERVICE_URL', 'http://127.0.0.1:8077'),
+        'timeout' => env('OCR_TIMEOUT', 180),
+    ],
+
+    'ghelpdesk' => [
+        'base_url' => env('GHELPDESK_URL'),
+        'token' => env('GHELPDESK_API_TOKEN'),
+    ],
+
 ];

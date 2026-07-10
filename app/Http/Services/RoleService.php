@@ -52,9 +52,25 @@ class RoleService
             'label' => 'Approvals Inbox',
             'permissions' => ['view'],
         ],
+        'document-templates' => [
+            'label' => 'Document Templates',
+            'permissions' => ['view', 'create', 'edit', 'delete'],
+        ],
+        'document-intake' => [
+            'label' => 'Document Intake',
+            'permissions' => ['view', 'validate', 'approve', 'export'],
+        ],
+        'document-exceptions' => [
+            'label' => 'Document Exceptions',
+            'permissions' => ['view', 'resolve', 'export'],
+        ],
+        'accounts-payable' => [
+            'label' => 'Accounts Payable',
+            'permissions' => ['view'],
+        ],
     ];
 
-    public static array $permissionOrder = ['view', 'create', 'edit', 'delete', 'approve', 'share', 'export'];
+    public static array $permissionOrder = ['view', 'create', 'edit', 'validate', 'delete', 'approve', 'resolve', 'share', 'export'];
 
     public static function getLandingPageOptions(): array
     {
@@ -69,6 +85,9 @@ class RoleService
             ['label' => 'Purchase Orders', 'route' => 'purchase-orders.index'],
             ['label' => 'Quotations', 'route' => 'quotations.index'],
             ['label' => 'Approvals Inbox', 'route' => 'approvals.index'],
+            ['label' => 'Document Intake', 'route' => 'document-intake.index'],
+            ['label' => 'Document Templates', 'route' => 'document-templates.index'],
+            ['label' => 'Document Exceptions', 'route' => 'document-exceptions.index'],
         ];
     }
 

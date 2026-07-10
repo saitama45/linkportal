@@ -24,6 +24,7 @@
         "@heroicons/vue": "^2.2.0",
         "apexcharts": "^5.13.0",
         "chart.js": "^4.5.1",
+        "pdfjs-dist": "^6.1.200",
         "vue-chartjs": "^5.3.3",
         "vue3-apexcharts": "^1.11.1"
     }

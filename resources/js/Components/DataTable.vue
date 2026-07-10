@@ -119,6 +119,11 @@ const props = defineProps({
         type: String,
         default: '',
     },
+    // Extra query params (e.g. active filters) preserved across search requests
+    extraParams: {
+        type: Object,
+        default: () => ({}),
+    },
 })
 
 const rows = computed(() => props.paginator?.data ?? [])
@@ -133,7 +138,7 @@ watch(searchValue, (value) => {
     searchTimeout = setTimeout(() => {
         router.get(
             route(props.routeName),
-            { search: value || undefined },
+            { ...props.extraParams, search: value || undefined },
             { preserveState: true, preserveScroll: true },
         )
     }, 300)
