@@ -4,6 +4,20 @@ set -euo pipefail
 APP_HOME=/var/www/html
 cd "$APP_HOME"
 
+# Persist uploaded files (template samples, intake documents, converted PDFs) on
+# the App Service managed /home share so they survive container restarts — the
+# container's own filesystem is ephemeral. Uses the already-mounted /home
+# (WEBSITES_ENABLE_APP_SERVICE_STORAGE=true), so NO extra storage resource is
+# needed. Only storage/app is redirected; framework caches stay local (fast).
+PERSIST_DIR="/home/site/linkportal/storage-app"
+if mkdir -p "$PERSIST_DIR/private" 2>/dev/null; then
+  [ -L "$APP_HOME/storage/app" ] || rm -rf "$APP_HOME/storage/app"
+  ln -sfn "$PERSIST_DIR" "$APP_HOME/storage/app"
+  echo "[entrypoint] storage/app -> $PERSIST_DIR (persistent /home share)"
+else
+  echo "[entrypoint] WARNING: /home not writable; uploaded files will NOT persist across restarts."
+fi
+
 echo "[entrypoint] Preparing storage directories..."
 mkdir -p \
   storage/framework/cache \
