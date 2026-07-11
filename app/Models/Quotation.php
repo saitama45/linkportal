@@ -38,8 +38,8 @@ class Quotation extends Model
     protected function casts(): array
     {
         return [
-            'quotation_date' => 'date',
-            'valid_until' => 'date',
+            'quotation_date' => 'date:Y-m-d',
+            'valid_until' => 'date:Y-m-d',
             'subtotal' => 'decimal:2',
             'tax_amount' => 'decimal:2',
             'total_amount' => 'decimal:2',

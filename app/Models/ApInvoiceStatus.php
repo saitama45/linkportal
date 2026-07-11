@@ -26,7 +26,7 @@ class ApInvoiceStatus extends Model
             'invoice_amount' => 'decimal:2',
             'paid_amount' => 'decimal:2',
             'outstanding_amount' => 'decimal:2',
-            'paid_date' => 'date',
+            'paid_date' => 'date:Y-m-d',
             'last_synced_at' => 'datetime',
         ];
     }

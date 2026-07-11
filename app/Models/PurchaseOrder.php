@@ -39,8 +39,8 @@ class PurchaseOrder extends Model
     protected function casts(): array
     {
         return [
-            'po_date' => 'date',
-            'expected_delivery_date' => 'date',
+            'po_date' => 'date:Y-m-d',
+            'expected_delivery_date' => 'date:Y-m-d',
             'subtotal' => 'decimal:2',
             'tax_amount' => 'decimal:2',
             'total_amount' => 'decimal:2',
