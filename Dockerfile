@@ -56,13 +56,22 @@ RUN set -eux; \
         python3 python3-venv python3-pip; \
     rm -rf /var/lib/apt/lists/*
 
-# --- Microsoft ODBC Driver 18 + sqlsrv / pdo_sqlsrv PHP extensions ----------
+# --- Microsoft ODBC Driver 18 (each step isolated so failures are obvious) --
 RUN set -eux; \
-    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg; \
-    curl -fsSL https://packages.microsoft.com/config/debian/12/prod.list -o /etc/apt/sources.list.d/mssql-release.list; \
+    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+
+RUN set -eux; \
+    echo "deb [arch=amd64,armhf,arm64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" \
+        > /etc/apt/sources.list.d/mssql-release.list
+
+RUN set -eux; \
     apt-get update; \
-    ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc-dev; \
-    rm -rf /var/lib/apt/lists/*; \
+    ACCEPT_EULA=Y apt-get install -y msodbcsql18; \
+    apt-get install -y unixodbc-dev; \
+    rm -rf /var/lib/apt/lists/*
+
+# --- sqlsrv / pdo_sqlsrv PHP extensions -------------------------------------
+RUN set -eux; \
     pecl channel-update pecl.php.net; \
     pecl install sqlsrv pdo_sqlsrv; \
     docker-php-ext-enable sqlsrv pdo_sqlsrv
@@ -71,7 +80,7 @@ RUN set -eux; \
 RUN set -eux; \
     docker-php-ext-configure gd --with-freetype --with-jpeg; \
     docker-php-ext-install -j"$(nproc)" \
-        pdo bcmath pcntl gd zip intl exif mbstring opcache
+        bcmath pcntl gd zip intl exif mbstring opcache
 
 WORKDIR ${APP_HOME}
 
