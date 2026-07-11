@@ -7,16 +7,7 @@
 # LibreOffice), all supervised by supervisord. No extra Azure resource required.
 # =============================================================================
 
-# ---- Stage 1: build front-end assets (Vite) --------------------------------
-FROM node:20-bookworm-slim AS assets
-WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm ci
-COPY . .
-RUN npm run build
-
-
-# ---- Stage 2: install PHP dependencies (Composer) --------------------------
+# ---- Stage 1: install PHP dependencies (Composer) --------------------------
 FROM composer:2 AS vendor
 WORKDIR /app
 COPY composer.json composer.lock ./
@@ -24,6 +15,19 @@ COPY composer.json composer.lock ./
 RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist --no-interaction
 COPY . .
 RUN composer dump-autoload --no-dev --optimize --classmap-authoritative
+
+
+# ---- Stage 2: build front-end assets (Vite) --------------------------------
+# resources/js/app.js imports ZiggyVue from vendor/tightenco/ziggy, so the
+# Composer vendor dir MUST be present before `npm run build` — copy it from the
+# vendor stage.
+FROM node:20-bookworm-slim AS assets
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci
+COPY . .
+COPY --from=vendor /app/vendor ./vendor
+RUN npm run build
 
 
 # ---- Stage 3: runtime image ------------------------------------------------
@@ -40,6 +44,8 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         nginx supervisor gnupg2 ca-certificates curl unzip \
+        # Compiler toolchain required by pecl / docker-php-ext-install
+        $PHPIZE_DEPS \
         # PHP extension build deps
         libpng-dev libjpeg62-turbo-dev libfreetype6-dev libzip-dev libicu-dev libonig-dev \
         # OCR runtime: Tesseract + LibreOffice (headless) + fonts
