@@ -27,6 +27,21 @@ php artisan package:discover --ansi || true
 echo "[entrypoint] Syncing permissions..."
 php artisan db:seed --class=PermissionSyncSeeder --force || echo "[entrypoint] WARNING: permission sync failed; continuing."
 
+# One-time bootstrap of the document-processing feature on a DB that predates it.
+# Gated + scoped: these migrations only create the NEW portal_document_* /
+# portal_intake_* tables (verified missing in prod), never the pre-existing
+# vendor/transaction tables. Set RUN_DOC_MIGRATIONS=true once, confirm the pages
+# load, then remove the setting. The exception-rule seeder is idempotent.
+if [ "${RUN_DOC_MIGRATIONS:-false}" = "true" ]; then
+  echo "[entrypoint] Bootstrapping document-processing tables..."
+  php artisan migrate --path=database/migrations/portal/2026_07_10_000001_create_portal_document_processing_tables.php --force \
+    || echo "[entrypoint] WARNING: doc-processing tables migration failed."
+  php artisan migrate --path=database/migrations/portal/2026_07_10_000003_create_portal_personal_access_tokens_table.php --force \
+    || echo "[entrypoint] WARNING: personal-access-tokens migration failed."
+  php artisan db:seed --class=DocumentExceptionRuleSeeder --force \
+    || echo "[entrypoint] WARNING: exception-rule seed failed."
+fi
+
 # Optional schema migrations. The shared DB (tashelpdeskdb) already contains the
 # full schema, so this stays OFF in production — a blanket `migrate` would try to
 # recreate existing tables. Kept non-fatal so a migration error never crash-loops
