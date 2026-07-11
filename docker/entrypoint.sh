@@ -22,12 +22,15 @@ php artisan storage:link --quiet 2>/dev/null || true
 echo "[entrypoint] Discovering packages..."
 php artisan package:discover --ansi || true
 
-# Optional schema migrations (shared DB — off by default; never migrate:fresh).
+# Optional schema migrations. The shared DB (tashelpdeskdb) already contains the
+# full schema, so this stays OFF in production — a blanket `migrate` would try to
+# recreate existing tables. Kept non-fatal so a migration error never crash-loops
+# the container; apply new migrations manually via SSH with a scoped --path.
 if [ "${RUN_MIGRATIONS_ON_STARTUP:-false}" = "true" ]; then
   echo "[entrypoint] Running migrations..."
-  php artisan migrate --force
+  php artisan migrate --force || echo "[entrypoint] WARNING: migrations failed; continuing startup."
 else
-  echo "[entrypoint] Skipping migrations (set RUN_MIGRATIONS_ON_STARTUP=true to enable)."
+  echo "[entrypoint] Skipping migrations (RUN_MIGRATIONS_ON_STARTUP is not 'true')."
 fi
 
 # Build caches with the runtime environment now available.

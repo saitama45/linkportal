@@ -123,7 +123,7 @@ Application settings**. Click **New application setting** for each row, then
 | `GHELPDESK_URL` / `GHELPDESK_API_TOKEN` | ghelpdesk integration |
 | `LINKPORTAL_URL` / `LINKPORTAL_API_TOKEN` | reverse integration |
 | `IMAP_HOST` / `IMAP_PORT` / `IMAP_ENCRYPTION` / `IMAP_USERNAME` / `IMAP_PASSWORD` | only if using email intake |
-| `RUN_MIGRATIONS_ON_STARTUP` | `true` for the very first deploy, then change to `false` |
+| `RUN_MIGRATIONS_ON_STARTUP` | `false` — shared DB already has the schema; never blanket-migrate it (see Part 2) |
 
 Copy across any other keys your current `.env` uses.
 
@@ -215,11 +215,12 @@ az webapp restart --name linkportal --resource-group <your-rg>
 
 # Part 2 — First boot & verification (both paths)
 
-1. For the **first** deploy, `RUN_MIGRATIONS_ON_STARTUP=true` (step 1.4) applies
-   the database migrations on boot. After it succeeds once, set it back to
-   **`false`** and save.
-   - Or run migrations manually via **SSH** (portal → your web app → **SSH**):
-     `php artisan migrate --force`
+1. Keep `RUN_MIGRATIONS_ON_STARTUP=false`. `tashelpdeskdb` is a **shared,
+   existing** database that already holds the full schema — a blanket `migrate`
+   would try to recreate existing tables and crash the container
+   (`There is already an object named 'companies'`). To apply a *new* migration,
+   do it deliberately via **SSH** (portal → your web app → **SSH**) with a scoped
+   path, e.g. `php artisan migrate --path=database/migrations/portal --force`.
 2. Open `https://<your-app>.azurewebsites.net` and sign in.
 3. Test OCR: open a Document Intake item → **Run OCR** → the fields should
    populate. (The OCR worker is localhost-only, so verify through the UI.)
