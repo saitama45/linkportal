@@ -31,7 +31,7 @@ RUN npm run build
 
 
 # ---- Stage 3: runtime image ------------------------------------------------
-FROM php:8.2-fpm-bookworm AS runtime
+FROM php:8.3-fpm-bookworm AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
     APP_HOME=/var/www/html \
