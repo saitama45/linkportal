@@ -59,11 +59,11 @@ RUN set -eux; \
 # --- Microsoft ODBC Driver 18 + sqlsrv / pdo_sqlsrv PHP extensions ----------
 RUN set -eux; \
     curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg; \
-    curl -fsSL https://packages.microsoft.com/config/debian/12/prod.list \
-        | tee /etc/apt/sources.list.d/mssql-release.list; \
+    curl -fsSL https://packages.microsoft.com/config/debian/12/prod.list -o /etc/apt/sources.list.d/mssql-release.list; \
     apt-get update; \
-    ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 unixodbc-dev; \
+    ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc-dev; \
     rm -rf /var/lib/apt/lists/*; \
+    pecl channel-update pecl.php.net; \
     pecl install sqlsrv pdo_sqlsrv; \
     docker-php-ext-enable sqlsrv pdo_sqlsrv
 
