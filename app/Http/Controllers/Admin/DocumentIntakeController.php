@@ -217,6 +217,7 @@ class DocumentIntakeController extends Controller
             'validated_line_items' => $validated['line_items'] ?? null,
         ])->save();
 
+        $intakeDocument->syncLineItems();
         $intakeDocument->recordEvent('corrections_saved', null, [], 'user', $request->user()->id);
         $this->exceptions->evaluate($intakeDocument->fresh(['vendor', 'latestExtraction']), 'extraction');
 
@@ -240,6 +241,7 @@ class DocumentIntakeController extends Controller
             'validated_by' => $request->user()->id,
             'validated_at' => now(),
         ])->save();
+        $intakeDocument->syncLineItems();
         $intakeDocument->recordEvent('validated', null, [], 'user', $request->user()->id);
         AuditLogger::log('intake_document_validated', $intakeDocument);
 

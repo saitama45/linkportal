@@ -51,8 +51,17 @@ php artisan migrate --path=database/migrations/portal/2026_07_10_000001_create_p
   || echo "[entrypoint] WARNING: doc-processing tables migration failed."
 php artisan migrate --path=database/migrations/portal/2026_07_10_000003_create_portal_personal_access_tokens_table.php --force \
   || echo "[entrypoint] WARNING: personal-access-tokens migration failed."
+php artisan migrate --path=database/migrations/portal/2026_07_12_000001_create_portal_intake_line_items_table.php --force \
+  || echo "[entrypoint] WARNING: intake-line-items migration failed."
 php artisan db:seed --class=DocumentExceptionRuleSeeder --force \
   || echo "[entrypoint] WARNING: exception-rule seed failed."
+
+# One-time backfill of the flat line-items table for documents validated before
+# this feature shipped. Set RUN_LINE_ITEM_BACKFILL=true once, then remove it.
+if [ "${RUN_LINE_ITEM_BACKFILL:-false}" = "true" ]; then
+  echo "[entrypoint] Backfilling intake line items..."
+  php artisan portal:backfill-line-items || echo "[entrypoint] WARNING: line-item backfill failed."
+fi
 
 # Optional schema migrations. The shared DB (tashelpdeskdb) already contains the
 # full schema, so this stays OFF in production — a blanket `migrate` would try to

@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\DB;
 
 class IntakeDocument extends Model
 {
@@ -111,6 +112,11 @@ class IntakeDocument extends Model
         return $this->hasMany(DocumentEvent::class)->orderBy('created_at');
     }
 
+    public function lineItems()
+    {
+        return $this->hasMany(IntakeLineItem::class)->orderBy('line_no');
+    }
+
     public function validator()
     {
         return $this->belongsTo(User::class, 'validated_by');
@@ -156,5 +162,50 @@ class IntakeDocument extends Model
             'meta' => $meta ?: null,
             'created_at' => now(),
         ]);
+    }
+
+    /**
+     * Rebuild the flat portal_intake_line_items projection from this document's
+     * line items — the corrected snapshot (validated_line_items) when present,
+     * otherwise the latest raw extraction. Idempotent: replaces the doc's rows.
+     */
+    public function syncLineItems(): void
+    {
+        $rows = $this->lineItemsForProjection();
+
+        DB::transaction(function () use ($rows) {
+            $this->lineItems()->delete();
+
+            foreach ($rows as $index => $row) {
+                $this->lineItems()->create([
+                    'line_no' => $index + 1,
+                    'description' => isset($row['description']) ? mb_substr((string) $row['description'], 0, 500) : null,
+                    'quantity' => is_numeric($row['quantity'] ?? null) ? $row['quantity'] : null,
+                    'uom' => isset($row['uom']) && $row['uom'] !== '' ? mb_substr((string) $row['uom'], 0, 50) : null,
+                    'unit_price' => is_numeric($row['unit_price'] ?? null) ? $row['unit_price'] : null,
+                    'line_total' => is_numeric($row['line_total'] ?? null) ? $row['line_total'] : null,
+                ]);
+            }
+        });
+    }
+
+    /** Normalize either shape (validated JSON or raw extraction cells) to flat rows. */
+    private function lineItemsForProjection(): array
+    {
+        if (! empty($this->validated_line_items)) {
+            return $this->validated_line_items;
+        }
+
+        $extraction = $this->relationLoaded('latestExtraction')
+            ? $this->latestExtraction
+            : $this->latestExtraction()->first();
+
+        return collect($extraction?->line_items ?? [])->map(fn ($row) => [
+            'description' => $row['cells']['description']['value'] ?? null,
+            'quantity' => $row['cells']['quantity']['value'] ?? null,
+            'uom' => $row['cells']['uom']['value'] ?? null,
+            'unit_price' => $row['cells']['unit_price']['value'] ?? null,
+            'line_total' => $row['cells']['line_total']['value'] ?? null,
+        ])->all();
     }
 }
