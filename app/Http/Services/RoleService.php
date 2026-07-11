@@ -58,7 +58,7 @@ class RoleService
         ],
         'document-intake' => [
             'label' => 'Document Intake',
-            'permissions' => ['view', 'validate', 'approve', 'export'],
+            'permissions' => ['view', 'validate', 'approve', 'export', 'delete'],
         ],
         'document-exceptions' => [
             'label' => 'Document Exceptions',

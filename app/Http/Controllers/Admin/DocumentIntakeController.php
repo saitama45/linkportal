@@ -75,6 +75,7 @@ class DocumentIntakeController extends Controller
             'documents' => Inertia::scroll($query->paginate(20)->withQueryString()),
             'filters' => $request->only(['search', 'status', 'document_type', 'source', 'date_from', 'date_to']),
             'canUpload' => $request->user()->can('document-intake.validate'),
+            'canDelete' => $request->user()->can('document-intake.delete'),
             'vendors' => Vendor::where('status', 'active')
                 ->orderBy('name')
                 ->get(['id', 'code', 'name']),
@@ -135,7 +136,36 @@ class DocumentIntakeController extends Controller
             'canValidate' => $request->user()->can('document-intake.validate'),
             'canSubmit' => $request->user()->can('document-intake.approve'),
             'canResolveExceptions' => $request->user()->can('document-exceptions.resolve'),
+            'canDelete' => $request->user()->can('document-intake.delete'),
         ]);
+    }
+
+    /** Soft-delete an intake document (files are retained for restore/audit). */
+    public function destroy(Request $request, IntakeDocument $intakeDocument)
+    {
+        abort_unless($request->user()->can('document-intake.delete'), 403);
+
+        // Documents already handed off to Accounting must not be deleted out from
+        // under the external review — resolve the handoff first.
+        $inFlight = [
+            IntakeDocument::STATUS_SENDING,
+            IntakeDocument::STATUS_PENDING_EXTERNAL_REVIEW,
+        ];
+        if (in_array($intakeDocument->status, $inFlight, true)) {
+            return redirect()
+                ->route('document-intake.index')
+                ->with('error', 'This document is with Accounting for review and cannot be deleted.');
+        }
+
+        $reference = $intakeDocument->reference_no;
+
+        $intakeDocument->recordEvent('deleted', 'Document deleted by admin', [], 'user', $request->user()->id);
+        AuditLogger::log('intake_document_deleted', $intakeDocument);
+        $intakeDocument->delete();
+
+        return redirect()
+            ->route('document-intake.index')
+            ->with('success', "Document {$reference} deleted.");
     }
 
     /** Stream the working PDF for the in-browser viewer. */

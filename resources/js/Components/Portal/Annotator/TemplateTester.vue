@@ -63,8 +63,13 @@ const chipClass = (confidence) => {
                         </thead>
                         <tbody>
                             <tr v-for="row in result.line_items" :key="row.row_index" class="border-t border-slate-50">
-                                <td v-for="(cell, key) in row.cells" :key="key" class="px-2 py-1.5 text-slate-700">
-                                    {{ cell.value ?? '—' }}
+                                <td v-for="(cell, key) in row.cells" :key="key" class="px-2 py-1.5">
+                                    <span v-if="cell.value !== null && cell.value !== undefined && cell.value !== ''"
+                                        class="text-slate-700">{{ cell.value }}</span>
+                                    <span v-else-if="cell.raw_text"
+                                        class="italic text-amber-600"
+                                        :title="`Captured text, but it isn't a valid ${key} value`">{{ cell.raw_text }}</span>
+                                    <span v-else class="text-slate-300">—</span>
                                 </td>
                             </tr>
                         </tbody>

@@ -9,7 +9,7 @@ import AnnotationOverlay from '@/Components/Portal/Annotator/AnnotationOverlay.v
 import FieldPalette from '@/Components/Portal/Annotator/FieldPalette.vue';
 import TemplateTester from '@/Components/Portal/Annotator/TemplateTester.vue';
 import { usePdfDocument } from '@/Composables/usePdfDocument';
-import { ArrowLeftIcon, ArrowUturnLeftIcon, BeakerIcon, BookOpenIcon, CheckBadgeIcon, DocumentArrowUpIcon, TrashIcon } from '@heroicons/vue/24/outline';
+import { ArrowLeftIcon, ArrowUturnLeftIcon, Bars3Icon, BeakerIcon, BookOpenIcon, CheckBadgeIcon, DocumentArrowUpIcon, PlusIcon, TrashIcon, XMarkIcon } from '@heroicons/vue/24/outline';
 
 const props = defineProps({
     template: { type: Object, required: true },
@@ -110,6 +110,63 @@ const loadPdf = () => {
 const onFieldsUpdate = (updated) => { if (!interacting) pushHistory(); fields.value = updated; dirty.value = true; };
 const onTableUpdate = (updated) => { if (!interacting) pushHistory(); table.value = updated; dirty.value = true; };
 const clearTable = () => { pushHistory(); table.value = null; dirty.value = true; };
+
+// ---- line-item column mapping ----
+// The extractor + validation expect these keys; users pick which one each
+// positional column holds so any vendor's left-to-right order can be matched.
+const COLUMN_KEYS = [
+    { key: 'description', label: 'Description' },
+    { key: 'quantity', label: 'Quantity' },
+    { key: 'uom', label: 'UOM' },
+    { key: 'unit_price', label: 'Unit Price' },
+    { key: 'line_total', label: 'Line Total' },
+];
+
+const usedColumnKeys = computed(() => new Set((table.value?.columns || []).map((c) => c.key)));
+
+const setColumnKey = (index, key) => {
+    const columns = table.value.columns.map((c, i) => (i === index ? { ...c, key } : c));
+    onTableUpdate({ ...table.value, columns });
+};
+
+const removeColumn = (index) => {
+    if (table.value.columns.length <= 1) return;
+    const columns = table.value.columns.filter((_, i) => i !== index);
+    onTableUpdate({ ...table.value, columns });
+};
+
+const addColumn = () => {
+    const columns = [...table.value.columns];
+    const last = columns[columns.length - 1];
+    const mid = (last.x0 + last.x1) / 2;
+    const unused = COLUMN_KEYS.find((k) => !usedColumnKeys.value.has(k.key))?.key;
+    if (!unused) return;
+    columns[columns.length - 1] = { ...last, x1: mid };
+    columns.push({ key: unused, x0: mid, x1: last.x1 });
+    onTableUpdate({ ...table.value, columns });
+};
+
+// Drag a column row to reorder. The x-boundaries are fixed positional slots
+// (they trace the document), so reordering reassigns which key sits in each
+// left-to-right slot rather than moving the boxes.
+const dragColumnIndex = ref(null);
+
+const onColumnDragStart = (event, index) => {
+    dragColumnIndex.value = index;
+    event.dataTransfer.effectAllowed = 'move';
+};
+
+const onColumnDrop = (index) => {
+    const from = dragColumnIndex.value;
+    dragColumnIndex.value = null;
+    if (from === null || from === index) return;
+    const cols = table.value.columns;
+    const keys = cols.map((c) => c.key);
+    const [moved] = keys.splice(from, 1);
+    keys.splice(index, 0, moved);
+    const columns = cols.map((c, i) => ({ ...c, key: keys[i] }));
+    onTableUpdate({ ...table.value, columns });
+};
 
 const annotationsPayload = computed(() => ({
     schema: 1,
@@ -351,20 +408,47 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
                                     <TrashIcon class="h-3.5 w-3.5" /> Clear
                                 </button>
                             </div>
-                            <p class="mb-2 text-[11px] font-semibold uppercase text-slate-400">Columns</p>
-                            <div class="flex flex-wrap gap-1.5">
-                                <span v-for="col in table.columns" :key="col.key"
-                                    class="rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700">
-                                    {{ col.key }}
-                                </span>
+                            <p class="mb-2 text-[11px] font-semibold uppercase text-slate-400">Columns (left → right)</p>
+                            <div class="space-y-2">
+                                <div v-for="(col, index) in table.columns" :key="index"
+                                    class="flex items-center gap-1.5 rounded-lg transition-colors"
+                                    :class="dragColumnIndex === index ? 'opacity-40' : ''"
+                                    @dragover.prevent
+                                    @drop="onColumnDrop(index)">
+                                    <span v-if="editable" class="flex-shrink-0 cursor-grab text-slate-300 hover:text-slate-500 active:cursor-grabbing"
+                                        draggable="true" title="Drag to reorder"
+                                        @dragstart="onColumnDragStart($event, index)"
+                                        @dragend="dragColumnIndex = null">
+                                        <Bars3Icon class="h-4 w-4" />
+                                    </span>
+                                    <span class="w-4 text-center text-xs font-bold text-slate-400">{{ index + 1 }}</span>
+                                    <select :value="col.key" :disabled="!editable"
+                                        class="min-w-0 flex-1 rounded-lg border-slate-300 text-xs focus:border-indigo-500 focus:ring-indigo-500/30"
+                                        @change="setColumnKey(index, $event.target.value)">
+                                        <option v-for="opt in COLUMN_KEYS" :key="opt.key" :value="opt.key"
+                                            :disabled="opt.key !== col.key && usedColumnKeys.has(opt.key)">
+                                            {{ opt.label }}
+                                        </option>
+                                    </select>
+                                    <button v-if="editable && table.columns.length > 1" type="button"
+                                        class="flex-shrink-0 rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-500"
+                                        title="Remove column" @click="removeColumn(index)">
+                                        <XMarkIcon class="h-4 w-4" />
+                                    </button>
+                                </div>
                             </div>
+                            <button v-if="editable && table.columns.length < COLUMN_KEYS.length" type="button"
+                                class="mt-2 flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:text-indigo-700"
+                                @click="addColumn">
+                                <PlusIcon class="h-3.5 w-3.5" /> Add column
+                            </button>
+                            <p class="mt-2 text-[11px] text-slate-400">Match each column to the value in that position of the document. Drag the vertical dividers on the page to adjust boundaries.</p>
                             <label class="mt-3 flex items-center gap-2 text-sm text-slate-600">
                                 <input type="checkbox" :checked="table.repeat_on_following_pages" :disabled="!editable"
                                     class="h-4 w-4 rounded border-slate-300 text-indigo-600"
                                     @change="onTableUpdate({ ...table, repeat_on_following_pages: $event.target.checked })" />
                                 Repeat on following pages
                             </label>
-                            <p class="mt-2 text-[11px] text-slate-400">Drag the vertical dividers on the page to adjust column boundaries.</p>
                         </div>
                         <div v-else-if="mode === 'table'" class="rounded-2xl border border-dashed border-indigo-200 bg-white p-4 text-sm text-slate-500 shadow-sm">
                             Draw a box over the table's data rows on the document to begin.

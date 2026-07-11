@@ -1,0 +1,45 @@
+# VCS / editor
+.git
+.gitignore
+.github
+.vscode
+.idea
+
+# PHP deps (reinstalled in the vendor stage)
+vendor
+
+# Node (reinstalled in the assets stage) + local Vite output (rebuilt)
+node_modules
+public/build
+public/hot
+
+# Python venv (rebuilt in the image) + caches
+ocr-worker/.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+ocr-worker/.pytest_cache
+
+# Secrets & local env — never bake into the image
+.env
+.env.*
+!.env.example
+
+# Local runtime data (recreated at container start)
+storage/app/private
+storage/app/public
+storage/logs/*.log
+storage/framework/cache/data
+storage/framework/sessions
+storage/framework/views
+
+# Tests & misc
+tests
+*.log
+.phpunit.result.cache
+npm-debug.log
+yarn-error.log
+Dockerfile
+.dockerignore
+web.config
+startup.sh

@@ -111,7 +111,7 @@ const submit = () => {
         <div class="pointer-events-none absolute inset-0 bg-gradient-to-t from-emerald-950/80 via-transparent to-emerald-950/40"></div>
 
         <!-- ===== Content ===== -->
-        <div class="relative z-10 flex min-h-screen flex-col lg:flex-row">
+        <div class="relative z-10 mx-auto flex min-h-screen max-w-[1680px] flex-col lg:flex-row">
             <!-- Brand hero -->
             <section class="flex flex-1 flex-col justify-between px-7 pb-8 pt-10 sm:px-12 sm:pt-14 lg:px-16 lg:py-14">
                 <!-- Brand mark -->
@@ -136,13 +136,13 @@ const submit = () => {
                     </div>
 
                     <h1 class="anim anim-3 text-4xl font-black leading-[1.05] tracking-tight sm:text-5xl xl:text-6xl">
-                        One secure gateway for
-                        <span class="gradient-text">everyone you work with.</span>
+                        Your one secure gateway
+                        <span class="gradient-text">to work with us.</span>
                     </h1>
 
                     <p class="anim anim-4 mt-6 max-w-md text-base leading-7 text-emerald-100/80">
-                        The single access point for customers, partners, vendors, and service providers to
-                        collaborate with your organization — anytime, anywhere.
+                        Sign in to manage documents, track requests, and stay in touch with our team —
+                        all from one account.
                     </p>
 
                     <!-- Audience chips -->
@@ -168,8 +168,8 @@ const submit = () => {
                 </footer>
             </section>
 
-            <!-- Form area (floats lower-right on desktop) -->
-            <section class="flex w-full items-center justify-center px-6 pb-10 sm:px-10 lg:w-[44%] lg:items-end lg:justify-end lg:px-14 lg:pb-16 xl:px-20">
+            <!-- Form area (vertically centered, right-aligned on desktop) -->
+            <section class="flex w-full items-center justify-center px-6 pb-10 sm:px-10 lg:w-[44%] lg:justify-end lg:px-14 lg:py-14 xl:px-20">
                 <div class="card-in relative w-full max-w-md">
                     <!-- Mascot: googly eyes that follow the cursor -->
                     <div class="mascot absolute -top-8 right-8 z-20" aria-hidden="true">

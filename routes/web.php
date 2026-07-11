@@ -83,6 +83,7 @@ Route::middleware('auth')->group(function () {
     Route::put('document-intake/{intakeDocument}/rerun-ocr', [DocumentIntakeController::class, 'rerunOcr'])->name('document-intake.rerun-ocr');
     Route::put('document-intake/{intakeDocument}/classify', [DocumentIntakeController::class, 'classify'])->name('document-intake.classify');
     Route::put('document-intake/{intakeDocument}/submit', [DocumentIntakeController::class, 'submit'])->name('document-intake.submit');
+    Route::delete('document-intake/{intakeDocument}', [DocumentIntakeController::class, 'destroy'])->name('document-intake.destroy');
 
     // --- OCR templates + visual annotator ---
     Route::get('document-templates', [DocumentTemplateController::class, 'index'])->name('document-templates.index');

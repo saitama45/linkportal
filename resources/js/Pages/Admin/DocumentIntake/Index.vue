@@ -4,7 +4,8 @@ import { Head, Link, router, useForm } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import DataTable from '@/Components/DataTable.vue';
 import StatusBadge from '@/Components/Portal/StatusBadge.vue';
-import { EyeIcon, ExclamationTriangleIcon, ArrowUpTrayIcon, XMarkIcon } from '@heroicons/vue/24/outline';
+import { EyeIcon, ExclamationTriangleIcon, ArrowUpTrayIcon, XMarkIcon, TrashIcon } from '@heroicons/vue/24/outline';
+import { useConfirm } from '@/Composables/useConfirm';
 
 const props = defineProps({
     documents: Object,
@@ -12,8 +13,24 @@ const props = defineProps({
     statuses: { type: Array, default: () => [] },
     stats: { type: Object, default: () => ({}) },
     canUpload: { type: Boolean, default: false },
+    canDelete: { type: Boolean, default: false },
     vendors: { type: Array, default: () => [] },
 });
+
+const { confirm } = useConfirm();
+
+const withAccounting = ['sending', 'pending_external_review'];
+const deleteDocument = async (doc) => {
+    const ok = await confirm({
+        title: 'Delete Document',
+        message: `Delete ${doc.reference_no}? This removes it from the intake inbox.`,
+        confirmButtonText: 'Delete',
+        type: 'danger',
+    });
+    if (ok) {
+        router.delete(route('document-intake.destroy', doc.id), { preserveScroll: true });
+    }
+};
 
 const showUpload = ref(false);
 const uploadForm = useForm({
@@ -193,10 +210,17 @@ const confidencePct = (value) => (value == null ? '—' : `${Math.round(value * 
                                 <td class="whitespace-nowrap px-6 py-4 text-right text-sm font-semibold text-slate-700">{{ confidencePct(doc.overall_confidence) }}</td>
                                 <td class="whitespace-nowrap px-6 py-4"><StatusBadge :status="doc.status" /></td>
                                 <td class="whitespace-nowrap px-6 py-4 text-right">
-                                    <Link :href="route('document-intake.show', doc.id)"
-                                        class="inline-flex rounded-lg p-2 text-slate-400 transition-all hover:bg-emerald-50 hover:text-emerald-600" title="Validate">
-                                        <EyeIcon class="h-5 w-5" />
-                                    </Link>
+                                    <div class="flex items-center justify-end gap-1">
+                                        <Link :href="route('document-intake.show', doc.id)"
+                                            class="inline-flex rounded-lg p-2 text-slate-400 transition-all hover:bg-emerald-50 hover:text-emerald-600" title="Validate">
+                                            <EyeIcon class="h-5 w-5" />
+                                        </Link>
+                                        <button v-if="canDelete && !withAccounting.includes(doc.status)" type="button"
+                                            class="inline-flex rounded-lg p-2 text-slate-400 transition-all hover:bg-red-50 hover:text-red-600" title="Delete"
+                                            @click="deleteDocument(doc)">
+                                            <TrashIcon class="h-5 w-5" />
+                                        </button>
+                                    </div>
                                 </td>
                             </tr>
                         </template>

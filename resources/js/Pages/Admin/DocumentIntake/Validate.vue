@@ -7,9 +7,10 @@ import DocumentTimeline from '@/Components/Portal/DocumentTimeline.vue';
 import IntakeLineItemsEditor from '@/Components/Portal/IntakeLineItemsEditor.vue';
 import PdfPageCanvas from '@/Components/Portal/Annotator/PdfPageCanvas.vue';
 import { usePdfDocument } from '@/Composables/usePdfDocument';
+import { useConfirm } from '@/Composables/useConfirm';
 import {
     ArrowLeftIcon, ArrowPathIcon, CheckBadgeIcon, ExclamationTriangleIcon,
-    PaperAirplaneIcon, ShieldCheckIcon,
+    PaperAirplaneIcon, ShieldCheckIcon, TrashIcon,
 } from '@heroicons/vue/24/outline';
 
 const props = defineProps({
@@ -19,7 +20,10 @@ const props = defineProps({
     canValidate: { type: Boolean, default: false },
     canSubmit: { type: Boolean, default: false },
     canResolveExceptions: { type: Boolean, default: false },
+    canDelete: { type: Boolean, default: false },
 });
+
+const { confirm } = useConfirm();
 
 const extraction = computed(() => props.document.latest_extraction);
 const extractionField = (key) => (extraction.value?.header_fields || []).find((f) => f.key === key);
@@ -144,6 +148,21 @@ const classify = () => {
 const editableStatuses = ['needs_validation', 'validated', 'returned'];
 const editable = computed(() => props.canValidate && editableStatuses.includes(props.document.status));
 
+// OCR can be (re)run for anything not already past the extraction stage — this
+// mirrors the controller and lets a document stuck at `received` or a failed
+// conversion/extraction be processed once a template is active / services are up.
+const rerunBlockedStatuses = ['sending', 'pending_external_review', 'approved', 'rejected', 'cancelled'];
+const canRerun = computed(() =>
+    props.canValidate
+    && !!props.document.vendor_id
+    && !!props.document.document_type
+    && !rerunBlockedStatuses.includes(props.document.status));
+
+// A document that has never produced an extraction (or whose OCR failed) has no
+// fields to show — surface why and offer to run OCR.
+const notYetProcessed = computed(() =>
+    !extraction.value || ['received', 'converting', 'extracting', 'conversion_failed', 'extraction_failed'].includes(props.document.status));
+
 const saveCorrections = () => {
     router.put(route('document-intake.corrections', props.document.id),
         { fields: form.value, line_items: lineItems.value },
@@ -164,14 +183,40 @@ const saveThen = (next) => {
     }
 };
 
-const rerunOcr = () => {
-    if (confirm('Re-run OCR? A new extraction attempt will be queued.')) {
+const rerunOcr = async () => {
+    const ok = await confirm({
+        title: extraction.value ? 'Re-run OCR' : 'Run OCR',
+        message: extraction.value
+            ? 'A new extraction attempt will be queued for this document.'
+            : 'Conversion and extraction will be queued for this document.',
+        confirmButtonText: extraction.value ? 'Re-run OCR' : 'Run OCR',
+        type: 'info',
+    });
+    if (ok) {
         router.put(route('document-intake.rerun-ocr', props.document.id), {}, { preserveScroll: true });
     }
 };
 
-const submitToReview = () => {
-    if (confirm('Submit this document to Accounting for review?')) {
+const deleteDocument = async () => {
+    const ok = await confirm({
+        title: 'Delete Document',
+        message: `Delete ${props.document.reference_no}? This removes it from the intake inbox.`,
+        confirmButtonText: 'Delete',
+        type: 'danger',
+    });
+    if (ok) {
+        router.delete(route('document-intake.destroy', props.document.id));
+    }
+};
+
+const submitToReview = async () => {
+    const ok = await confirm({
+        title: 'Submit to Accounting',
+        message: 'Submit this document to Accounting for review?',
+        confirmButtonText: 'Submit',
+        type: 'info',
+    });
+    if (ok) {
         router.put(route('document-intake.submit', props.document.id), {}, { preserveScroll: true });
     }
 };
@@ -200,11 +245,11 @@ const typeLabel = computed(() => ({ invoice: 'Invoice', purchase_order: 'Purchas
                 </div>
 
                 <div class="flex flex-wrap items-center gap-2">
-                    <button v-if="editable" type="button"
+                    <button v-if="canRerun" type="button"
                         class="flex items-center gap-1.5 rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 transition-all hover:bg-slate-50"
                         @click="rerunOcr">
                         <ArrowPathIcon class="h-4 w-4" />
-                        Re-run OCR
+                        {{ extraction ? 'Re-run OCR' : 'Run OCR' }}
                     </button>
                     <button v-if="editable" type="button" :disabled="!dirty"
                         class="rounded-xl bg-emerald-600 px-5 py-2 text-sm font-semibold text-white shadow-lg shadow-emerald-600/20 transition-all hover:bg-emerald-700 disabled:opacity-50"
@@ -223,6 +268,12 @@ const typeLabel = computed(() => ({ invoice: 'Invoice', purchase_order: 'Purchas
                         @click="submitToReview">
                         <PaperAirplaneIcon class="h-4 w-4" />
                         Submit to Accounting
+                    </button>
+                    <button v-if="canDelete" type="button"
+                        class="flex items-center gap-1.5 rounded-xl border border-red-200 px-4 py-2 text-sm font-semibold text-red-600 transition-all hover:bg-red-50"
+                        @click="deleteDocument">
+                        <TrashIcon class="h-4 w-4" />
+                        Delete
                     </button>
                 </div>
             </div>
@@ -306,6 +357,30 @@ const typeLabel = computed(() => ({ invoice: 'Invoice', purchase_order: 'Purchas
                             </div>
                         </div>
 
+                        <!-- Not yet processed by OCR -->
+                        <div v-if="!needsClassification && notYetProcessed"
+                            class="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-5 sm:flex-row sm:items-center sm:justify-between">
+                            <div class="flex items-start gap-3">
+                                <ArrowPathIcon class="mt-0.5 h-5 w-5 flex-shrink-0 text-slate-400" />
+                                <div>
+                                    <h3 class="text-sm font-bold text-slate-700">
+                                        {{ document.status === 'conversion_failed' || document.status === 'extraction_failed'
+                                            ? 'OCR did not complete' : 'Not yet processed by OCR' }}
+                                    </h3>
+                                    <p class="mt-1 text-sm text-slate-500">
+                                        No fields have been extracted yet. Run OCR to convert and extract this document —
+                                        make sure the OCR service and queue worker are running.
+                                    </p>
+                                </div>
+                            </div>
+                            <button v-if="canRerun" type="button"
+                                class="flex flex-shrink-0 items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-emerald-600/20 transition-all hover:bg-emerald-700"
+                                @click="rerunOcr">
+                                <ArrowPathIcon class="h-4 w-4" />
+                                Run OCR
+                            </button>
+                        </div>
+
                         <!-- Totals reconciliation banner -->
                         <div v-if="totalsDelta !== null"
                             :class="['flex items-center justify-between rounded-2xl border p-4 text-sm font-semibold',
@@ -339,14 +414,6 @@ const typeLabel = computed(() => ({ invoice: 'Invoice', purchase_order: 'Purchas
                                 </div>
                             </div>
                         </div>
-
-                        <!-- Line items -->
-                        <IntakeLineItemsEditor
-                            v-model="lineItems"
-                            :extraction-rows="extraction?.line_items || []"
-                            :readonly="!editable"
-                            @update:model-value="dirty = true"
-                        />
 
                         <!-- Exceptions -->
                         <div class="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
@@ -393,6 +460,16 @@ const typeLabel = computed(() => ({ invoice: 'Invoice', purchase_order: 'Purchas
                             <DocumentTimeline :events="document.events" audience="admin" />
                         </div>
                     </div>
+                </div>
+
+                <!-- Line items (full width for readability) -->
+                <div class="mt-6">
+                    <IntakeLineItemsEditor
+                        v-model="lineItems"
+                        :extraction-rows="extraction?.line_items || []"
+                        :readonly="!editable"
+                        @update:model-value="dirty = true"
+                    />
                 </div>
             </div>
         </div>
