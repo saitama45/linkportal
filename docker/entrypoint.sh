@@ -22,6 +22,11 @@ php artisan storage:link --quiet 2>/dev/null || true
 echo "[entrypoint] Discovering packages..."
 php artisan package:discover --ansi || true
 
+# Keep RBAC permissions in sync with the code (idempotent, additive). This is
+# what makes new modules' menu items appear after a deploy. Never touches schema.
+echo "[entrypoint] Syncing permissions..."
+php artisan db:seed --class=PermissionSyncSeeder --force || echo "[entrypoint] WARNING: permission sync failed; continuing."
+
 # Optional schema migrations. The shared DB (tashelpdeskdb) already contains the
 # full schema, so this stays OFF in production — a blanket `migrate` would try to
 # recreate existing tables. Kept non-fatal so a migration error never crash-loops
