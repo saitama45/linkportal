@@ -65,10 +65,23 @@ if [ "${RUN_LINE_ITEM_BACKFILL:-false}" = "true" ]; then
   php artisan portal:backfill-line-items || echo "[entrypoint] WARNING: line-item backfill failed."
 fi
 
+# One-time issuance of the linkportal integration token (this container has no
+# SSH/console). Set ISSUE_GHELPDESK_TOKEN=true, restart, then read the plaintext
+# token from the Log stream and paste it into ghelpdesk's LINKPORTAL_API_TOKEN.
+# Remove the flag afterwards — re-running revokes the old token and prints a new
+# one (breaking the callback until ghelpdesk is updated). The banner markers make
+# it easy to spot in the logs.
+if [ "${ISSUE_GHELPDESK_TOKEN:-false}" = "true" ]; then
+  echo "========== [entrypoint] ISSUING GHELPDESK INTEGRATION TOKEN =========="
+  php artisan portal:issue-integration-token ghelpdesk || echo "[entrypoint] WARNING: token issuance failed."
+  echo "===== [entrypoint] ^ copy the token above into ghelpdesk LINKPORTAL_API_TOKEN, then remove ISSUE_GHELPDESK_TOKEN ====="
+fi
+
 # Optional schema migrations. The shared DB (tashelpdeskdb) already contains the
 # full schema, so this stays OFF in production — a blanket `migrate` would try to
 # recreate existing tables. Kept non-fatal so a migration error never crash-loops
-# the container; apply new migrations manually via SSH with a scoped --path.
+# the container. This container has NO SSH; apply new migrations by adding a scoped
+# `migrate --path=...` line to the doc-processing block above (runs on next deploy).
 if [ "${RUN_MIGRATIONS_ON_STARTUP:-false}" = "true" ]; then
   echo "[entrypoint] Running migrations..."
   php artisan migrate --force || echo "[entrypoint] WARNING: migrations failed; continuing startup."
