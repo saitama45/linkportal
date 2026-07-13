@@ -10,7 +10,7 @@ class IntakeLineItem extends Model
 
     protected $fillable = [
         'intake_document_id', 'line_no',
-        'description', 'quantity', 'uom', 'unit_price', 'line_total',
+        'description', 'quantity', 'uom', 'unit_price', 'line_total', 'extra',
     ];
 
     protected function casts(): array
@@ -21,6 +21,7 @@ class IntakeLineItem extends Model
             'quantity' => 'decimal:4',
             'unit_price' => 'decimal:4',
             'line_total' => 'decimal:2',
+            'extra' => 'array',
         ];
     }
 

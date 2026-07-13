@@ -4,7 +4,7 @@ import { Head, Link, router, useForm } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import DataTable from '@/Components/DataTable.vue';
 import StatusBadge from '@/Components/Portal/StatusBadge.vue';
-import { EyeIcon, ExclamationTriangleIcon, ArrowUpTrayIcon, XMarkIcon, TrashIcon } from '@heroicons/vue/24/outline';
+import { EyeIcon, PencilSquareIcon, ExclamationTriangleIcon, ArrowUpTrayIcon, XMarkIcon, TrashIcon } from '@heroicons/vue/24/outline';
 import { useConfirm } from '@/Composables/useConfirm';
 
 const props = defineProps({
@@ -20,6 +20,8 @@ const props = defineProps({
 const { confirm } = useConfirm();
 
 const withAccounting = ['sending', 'pending_external_review'];
+// Documents that haven't been validated yet — still editable / re-runnable.
+const preValidationStatuses = ['received', 'converting', 'conversion_failed', 'extracting', 'extraction_failed', 'needs_validation'];
 const deleteDocument = async (doc) => {
     const ok = await confirm({
         title: 'Delete Document',
@@ -54,6 +56,28 @@ const submitUpload = () => {
         forceFormData: true,
         preserveScroll: true,
         onSuccess: () => { showUpload.value = false; },
+    });
+};
+
+// ---- Edit header (vendor / document type) then re-run OCR ----
+const showEdit = ref(false);
+const editDocId = ref(null);
+const editRef = ref('');
+const editForm = useForm({ vendor_id: '', document_type: '' });
+
+const openEdit = (doc) => {
+    editDocId.value = doc.id;
+    editRef.value = doc.reference_no;
+    editForm.vendor_id = doc.vendor_id ?? '';
+    editForm.document_type = doc.document_type ?? '';
+    editForm.clearErrors();
+    showEdit.value = true;
+};
+
+const submitEdit = () => {
+    editForm.put(route('document-intake.classify', editDocId.value), {
+        preserveScroll: true,
+        onSuccess: () => { showEdit.value = false; },
     });
 };
 
@@ -211,8 +235,13 @@ const confidencePct = (value) => (value == null ? '—' : `${Math.round(value * 
                                 <td class="whitespace-nowrap px-6 py-4"><StatusBadge :status="doc.status" /></td>
                                 <td class="whitespace-nowrap px-6 py-4 text-right">
                                     <div class="flex items-center justify-end gap-1">
+                                        <button v-if="preValidationStatuses.includes(doc.status)" type="button"
+                                            class="inline-flex rounded-lg p-2 text-slate-400 transition-all hover:bg-indigo-50 hover:text-indigo-600" title="Edit vendor/type & re-run OCR"
+                                            @click="openEdit(doc)">
+                                            <PencilSquareIcon class="h-5 w-5" />
+                                        </button>
                                         <Link :href="route('document-intake.show', doc.id)"
-                                            class="inline-flex rounded-lg p-2 text-slate-400 transition-all hover:bg-emerald-50 hover:text-emerald-600" title="Validate">
+                                            class="inline-flex rounded-lg p-2 text-slate-400 transition-all hover:bg-emerald-50 hover:text-emerald-600" title="View">
                                             <EyeIcon class="h-5 w-5" />
                                         </Link>
                                         <button v-if="canDelete && !withAccounting.includes(doc.status)" type="button"
@@ -284,6 +313,66 @@ const confidencePct = (value) => (value == null ? '—' : `${Math.round(value * 
                                 class="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-2 text-sm font-semibold text-white transition-all hover:bg-emerald-700 disabled:opacity-60">
                                 <ArrowUpTrayIcon class="h-4 w-4" />
                                 {{ uploadForm.processing ? 'Uploading…' : 'Upload' }}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </Teleport>
+
+        <!-- Edit header (vendor / document type) then re-run OCR -->
+        <Teleport to="body">
+            <div v-if="showEdit" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" @click.self="showEdit = false">
+                <div class="w-full max-w-lg rounded-2xl bg-white shadow-xl">
+                    <div class="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+                        <div>
+                            <h3 class="text-lg font-bold text-slate-900">Edit Document</h3>
+                            <p class="text-sm text-slate-500">
+                                Correct the vendor / type for <span class="font-semibold">{{ editRef }}</span> — this re-resolves the OCR template and re-runs extraction.
+                            </p>
+                        </div>
+                        <button type="button" class="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600" @click="showEdit = false">
+                            <XMarkIcon class="h-5 w-5" />
+                        </button>
+                    </div>
+
+                    <form class="space-y-4 px-6 py-5" @submit.prevent="submitEdit">
+                        <div>
+                            <label class="mb-1 block text-xs font-bold uppercase text-slate-400">Vendor</label>
+                            <select v-model="editForm.vendor_id"
+                                class="block w-full rounded-lg border-slate-300 text-sm focus:border-emerald-500 focus:ring-emerald-500/30">
+                                <option value="" disabled>Select a vendor…</option>
+                                <option v-for="vendor in vendors" :key="vendor.id" :value="vendor.id">
+                                    {{ vendor.name }}<span v-if="vendor.code"> ({{ vendor.code }})</span>
+                                </option>
+                            </select>
+                            <p v-if="editForm.errors.vendor_id" class="mt-1 text-xs text-red-600">{{ editForm.errors.vendor_id }}</p>
+                        </div>
+
+                        <div>
+                            <label class="mb-1 block text-xs font-bold uppercase text-slate-400">Document Type</label>
+                            <select v-model="editForm.document_type"
+                                class="block w-full rounded-lg border-slate-300 text-sm focus:border-emerald-500 focus:ring-emerald-500/30">
+                                <option value="" disabled>Select a type…</option>
+                                <option value="invoice">Invoice</option>
+                                <option value="purchase_order">Purchase Order</option>
+                                <option value="quotation">Quotation</option>
+                            </select>
+                            <p v-if="editForm.errors.document_type" class="mt-1 text-xs text-red-600">{{ editForm.errors.document_type }}</p>
+                        </div>
+
+                        <p class="rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-700">
+                            Saving re-runs OCR using the template that matches this vendor + type. Make sure the version you want is <span class="font-semibold">Active</span> in OCR Templates.
+                        </p>
+
+                        <div class="flex items-center justify-end gap-3 pt-2">
+                            <button type="button" class="rounded-xl px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100" @click="showEdit = false">
+                                Cancel
+                            </button>
+                            <button type="submit" :disabled="editForm.processing"
+                                class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2 text-sm font-semibold text-white transition-all hover:bg-indigo-700 disabled:opacity-60">
+                                <PencilSquareIcon class="h-4 w-4" />
+                                {{ editForm.processing ? 'Saving…' : 'Save & re-run OCR' }}
                             </button>
                         </div>
                     </form>

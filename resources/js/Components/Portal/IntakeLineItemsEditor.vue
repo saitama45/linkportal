@@ -3,18 +3,34 @@ import { computed } from 'vue';
 import { PlusIcon, TrashIcon } from '@heroicons/vue/24/outline';
 
 /**
- * Line-item editor for OCR intake validation. Free-text UOM, explicit
- * line_total (as extracted), and per-cell confidence tinting from the raw
- * extraction rows so low-confidence cells stand out.
+ * Line-item editor for OCR intake validation. Columns are driven by the
+ * template (custom names + unlimited count are supported); the five standard
+ * keys carry numeric parsing and the Line Total drives the row-sum footer.
+ * Per-cell confidence tinting comes from the raw extraction rows.
  */
+const DEFAULT_COLUMNS = [
+    { key: 'description', label: 'Description' },
+    { key: 'quantity', label: 'Quantity' },
+    { key: 'uom', label: 'UOM' },
+    { key: 'unit_price', label: 'Unit Price' },
+    { key: 'line_total', label: 'Line Total' },
+];
+
+const NUMERIC_KEYS = new Set(['quantity', 'unit_price', 'line_total']);
+
 const props = defineProps({
-    modelValue: { type: Array, default: () => [] }, // [{description, quantity, uom, unit_price, line_total}]
+    modelValue: { type: Array, default: () => [] }, // [{<colKey>: value, ...}]
+    columns: { type: Array, default: () => ([]) }, // [{key, label, numeric?}] — empty falls back to DEFAULT_COLUMNS
     extractionRows: { type: Array, default: () => [] }, // raw extraction rows with cells.{key}.confidence
     lowThreshold: { type: Number, default: 0.75 },
     readonly: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(['update:modelValue']);
+
+const cols = computed(() => (props.columns?.length ? props.columns : DEFAULT_COLUMNS));
+const isNumeric = (col) => (col.numeric ?? NUMERIC_KEYS.has(col.key));
+const hasLineTotal = computed(() => cols.value.some((c) => c.key === 'line_total'));
 
 const items = computed({
     get: () => props.modelValue,
@@ -36,17 +52,20 @@ const inputClass = (rowIndex, key) => [
     cellClass(rowIndex, key),
 ];
 
+const blankItem = () => Object.fromEntries(cols.value.map((c) => [c.key, isNumeric(c) ? null : '']));
+
 const addItem = () => {
-    items.value = [...items.value, { description: '', quantity: null, uom: '', unit_price: null, line_total: null }];
+    items.value = [...items.value, blankItem()];
 };
 
 const removeItem = (index) => {
     items.value = items.value.filter((_, i) => i !== index);
 };
 
-const update = (index, key, value) => {
+const update = (index, col, rawValue) => {
+    const value = isNumeric(col) ? (rawValue === '' ? null : Number(rawValue)) : rawValue;
     const next = [...items.value];
-    next[index] = { ...next[index], [key]: value };
+    next[index] = { ...next[index], [col.key]: value };
     items.value = next;
 };
 
@@ -72,35 +91,21 @@ defineExpose({ lineSum });
             <table class="min-w-full divide-y divide-slate-100">
                 <thead class="bg-slate-50">
                     <tr>
-                        <th class="min-w-[240px] px-3 py-2.5 text-left text-[10px] font-black uppercase tracking-widest text-slate-500">Description</th>
-                        <th class="w-24 px-3 py-2.5 text-left text-[10px] font-black uppercase tracking-widest text-slate-500">Qty</th>
-                        <th class="w-24 px-3 py-2.5 text-left text-[10px] font-black uppercase tracking-widest text-slate-500">UOM</th>
-                        <th class="w-32 px-3 py-2.5 text-left text-[10px] font-black uppercase tracking-widest text-slate-500">Unit Price</th>
-                        <th class="w-32 px-3 py-2.5 text-left text-[10px] font-black uppercase tracking-widest text-slate-500">Line Total</th>
+                        <th v-for="col in cols" :key="col.key"
+                            class="px-3 py-2.5 text-left text-[10px] font-black uppercase tracking-widest text-slate-500"
+                            :class="col.key === 'description' ? 'min-w-[240px]' : 'min-w-[7rem]'">
+                            {{ col.label }}
+                        </th>
                         <th class="w-10"></th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-50">
                     <tr v-for="(item, index) in items" :key="index" class="align-top">
-                        <td class="px-3 py-2">
-                            <input :value="item.description" type="text" :disabled="readonly" :class="inputClass(index, 'description')"
-                                @input="update(index, 'description', $event.target.value)" />
-                        </td>
-                        <td class="px-3 py-2">
-                            <input :value="item.quantity" type="number" step="any" :disabled="readonly" :class="inputClass(index, 'quantity')"
-                                @input="update(index, 'quantity', $event.target.value === '' ? null : Number($event.target.value))" />
-                        </td>
-                        <td class="px-3 py-2">
-                            <input :value="item.uom" type="text" :disabled="readonly" :class="inputClass(index, 'uom')"
-                                @input="update(index, 'uom', $event.target.value)" />
-                        </td>
-                        <td class="px-3 py-2">
-                            <input :value="item.unit_price" type="number" step="any" :disabled="readonly" :class="inputClass(index, 'unit_price')"
-                                @input="update(index, 'unit_price', $event.target.value === '' ? null : Number($event.target.value))" />
-                        </td>
-                        <td class="px-3 py-2">
-                            <input :value="item.line_total" type="number" step="any" :disabled="readonly" :class="inputClass(index, 'line_total')"
-                                @input="update(index, 'line_total', $event.target.value === '' ? null : Number($event.target.value))" />
+                        <td v-for="col in cols" :key="col.key" class="px-3 py-2">
+                            <input :value="item[col.key]" :type="isNumeric(col) ? 'number' : 'text'"
+                                :step="isNumeric(col) ? 'any' : undefined" :disabled="readonly"
+                                :class="inputClass(index, col.key)"
+                                @input="update(index, col, $event.target.value)" />
                         </td>
                         <td class="px-1 py-2">
                             <button v-if="!readonly" type="button"
@@ -111,7 +116,7 @@ defineExpose({ lineSum });
                         </td>
                     </tr>
                     <tr v-if="items.length === 0">
-                        <td colspan="6" class="px-4 py-8 text-center text-sm font-medium text-slate-400">
+                        <td :colspan="cols.length + 1" class="px-4 py-8 text-center text-sm font-medium text-slate-400">
                             No line items extracted. Add rows manually if the document has them.
                         </td>
                     </tr>
@@ -119,7 +124,7 @@ defineExpose({ lineSum });
             </table>
         </div>
 
-        <div class="flex justify-end border-t border-slate-100 bg-slate-50/60 px-5 py-3 text-sm font-bold text-slate-700">
+        <div v-if="hasLineTotal" class="flex justify-end border-t border-slate-100 bg-slate-50/60 px-5 py-3 text-sm font-bold text-slate-700">
             Line sum: {{ money(lineSum) }}
         </div>
     </div>

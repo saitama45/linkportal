@@ -83,10 +83,18 @@ class DocumentExceptionService
      */
     private function sync(IntakeDocument $document, DocumentExceptionRule $rule, Collection $raised): void
     {
-        $open = $document->exceptions()
+        // A human who Waived or Resolved an exception has made a deliberate
+        // decision — re-evaluation must not resurrect it. Auto-resolved ones
+        // (resolved_by null, raised then cleared automatically) are excluded, so a
+        // condition that genuinely returns is still re-flagged.
+        $existing = $document->exceptions()
             ->where('rule_key', $rule->rule_key)
-            ->where('status', 'open')
-            ->get()
+            ->whereIn('status', ['open', 'waived', 'resolved'])
+            ->get();
+
+        $open = $existing->where('status', 'open')->keyBy(fn ($e) => (string) $e->field_key);
+        $acknowledged = $existing
+            ->filter(fn ($e) => $e->status === 'waived' || ($e->status === 'resolved' && $e->resolved_by !== null))
             ->keyBy(fn ($e) => (string) $e->field_key);
 
         $raisedKeys = [];
@@ -94,8 +102,13 @@ class DocumentExceptionService
             $fieldKey = $item['field_key'] ?? null;
             $raisedKeys[] = (string) $fieldKey;
 
-            if ($existing = $open->get((string) $fieldKey)) {
-                $existing->update(['message' => $item['message'], 'context' => $item['context'] ?? null]);
+            // A human already decided on this exception — don't re-raise it.
+            if ($acknowledged->has((string) $fieldKey)) {
+                continue;
+            }
+
+            if ($existingOpen = $open->get((string) $fieldKey)) {
+                $existingOpen->update(['message' => $item['message'], 'context' => $item['context'] ?? null]);
                 continue;
             }
 
@@ -110,6 +123,7 @@ class DocumentExceptionService
             $document->recordEvent('exception_raised', $item['message'], ['rule_key' => $rule->rule_key]);
         }
 
+        // Auto-resolve OPEN exceptions the evaluator no longer reports (waived untouched).
         foreach ($open as $fieldKey => $exception) {
             if (! in_array($fieldKey, $raisedKeys, true)) {
                 $exception->update([

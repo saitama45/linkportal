@@ -11,6 +11,7 @@ use App\Models\Vendor;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 
 class DocumentTemplateController extends Controller
@@ -39,6 +40,11 @@ class DocumentTemplateController extends Controller
             'templates' => Inertia::scroll($query->paginate(20)->withQueryString()),
             'filters' => $request->only(['search', 'document_type']),
             'vendors' => Vendor::where('status', 'active')->orderBy('name')->get(['id', 'code', 'name']),
+            // (vendor_id, document_type) pairs already covered — the create modal
+            // hides these so a duplicate template can't be made (use New Version).
+            'existingScopes' => DocumentTemplate::get(['vendor_id', 'document_type'])
+                ->map(fn ($t) => ['vendor_id' => $t->vendor_id, 'document_type' => $t->document_type])
+                ->values(),
         ]);
     }
 
@@ -52,6 +58,18 @@ class DocumentTemplateController extends Controller
             'name' => 'required|string|max:100',
             'description' => 'nullable|string|max:255',
         ]);
+
+        // One template per vendor + document type — extra layouts go on separate
+        // versions of that template, not a second template (keeps resolveFor unambiguous).
+        $scopeExists = DocumentTemplate::where('document_type', $validated['document_type'])
+            ->when(empty($validated['vendor_id']), fn ($q) => $q->whereNull('vendor_id'))
+            ->when(! empty($validated['vendor_id']), fn ($q) => $q->where('vendor_id', $validated['vendor_id']))
+            ->exists();
+        if ($scopeExists) {
+            throw ValidationException::withMessages([
+                'vendor_id' => 'A template already exists for this vendor and document type. Open it and add a New Version instead.',
+            ]);
+        }
 
         $template = DocumentTemplate::create($validated + [
             'status' => 'draft',
@@ -73,6 +91,7 @@ class DocumentTemplateController extends Controller
                 'versions' => fn ($q) => $q->select('id', 'template_id', 'version_no', 'status', 'annotations', 'page_meta', 'sample_file_path', 'activated_at', 'created_at'),
             ]),
             'canEdit' => $request->user()->can('document-templates.edit'),
+            'canDelete' => $request->user()->can('document-templates.delete'),
         ]);
     }
 
@@ -147,14 +166,15 @@ class DocumentTemplateController extends Controller
         return redirect()->back()->with('success', "Draft version v{$version->version_no} created.");
     }
 
-    /** Save annotations on a draft version. */
+    /** Save annotations on a draft or active version. */
     public function updateVersion(Request $request, DocumentTemplate $documentTemplate, DocumentTemplateVersion $version)
     {
         abort_unless($request->user()->can('document-templates.edit'), 403);
         abort_unless($version->template_id === $documentTemplate->id, 404);
 
-        if ($version->status !== 'draft') {
-            return redirect()->back()->with('error', 'Only draft versions can be edited. Create a new version instead.');
+        // Draft + active are editable in place; superseded/archived history is locked.
+        if (! in_array($version->status, ['draft', 'active'], true)) {
+            return redirect()->back()->with('error', 'This version is archived. Create a new version to make changes.');
         }
 
         $request->validate([

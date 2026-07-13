@@ -96,7 +96,9 @@ class DocumentIntakeService
      */
     public function assignVendorAndType(IntakeDocument $document, ?int $vendorId, ?string $documentType, ?int $userId = null): IntakeDocument
     {
-        if ($vendorId && ! $document->vendor_id) {
+        // Set on first classification, and allow an admin to correct it later
+        // (changing vendor/type re-resolves which OCR template is used).
+        if ($vendorId) {
             $vendor = Vendor::findOrFail($vendorId);
             $document->fill(['vendor_id' => $vendor->id, 'company_id' => $vendor->company_id]);
         }

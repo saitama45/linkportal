@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { Head, Link, useForm } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import DataTable from '@/Components/DataTable.vue';
@@ -8,10 +8,11 @@ import Modal from '@/Components/Modal.vue';
 import { usePermission } from '@/Composables/usePermission';
 import { PencilSquareIcon, PlusIcon } from '@heroicons/vue/24/outline';
 
-defineProps({
+const props = defineProps({
     templates: Object,
     filters: { type: Object, default: () => ({}) },
     vendors: { type: Array, default: () => [] },
+    existingScopes: { type: Array, default: () => [] },
 });
 
 const { hasPermission } = usePermission();
@@ -23,6 +24,28 @@ const form = useForm({
     name: '',
     description: '',
 });
+
+// Vendor keys (id, or null for Global) that already have a template of the
+// chosen type â€” one template per vendor+type, so hide the taken ones.
+const takenForType = computed(() => {
+    const set = new Set();
+    for (const s of props.existingScopes) {
+        if (s.document_type === form.document_type) set.add(s.vendor_id ?? null);
+    }
+    return set;
+});
+const globalTaken = computed(() => takenForType.value.has(null));
+const availableVendors = computed(() => props.vendors.filter((v) => !takenForType.value.has(v.id)));
+const noneAvailable = computed(() => globalTaken.value && availableVendors.value.length === 0);
+
+// Keep the selection valid when the type changes or the modal opens.
+const pickValidVendor = () => {
+    if (takenForType.value.has(form.vendor_id ?? null)) {
+        form.vendor_id = globalTaken.value ? (availableVendors.value[0]?.id ?? null) : null;
+    }
+};
+watch(() => form.document_type, pickValidVendor);
+watch(showCreate, (open) => { if (open) pickValidVendor(); });
 
 const submit = () => {
     form.post(route('document-templates.store'), {
@@ -112,10 +135,15 @@ const formatDate = (value) => (value ? new Date(value).toLocaleDateString() : 'â
                 <div class="mt-5 space-y-4">
                     <div>
                         <label class="mb-1 block text-sm font-semibold text-slate-700">Vendor</label>
-                        <select v-model="form.vendor_id" class="w-full rounded-lg border-slate-300 text-sm focus:border-emerald-500 focus:ring-emerald-500/30">
-                            <option :value="null">Global (fallback for all vendors)</option>
-                            <option v-for="vendor in vendors" :key="vendor.id" :value="vendor.id">{{ vendor.name }} ({{ vendor.code }})</option>
+                        <select v-model="form.vendor_id" :disabled="noneAvailable"
+                            class="w-full rounded-lg border-slate-300 text-sm focus:border-emerald-500 focus:ring-emerald-500/30 disabled:bg-slate-50">
+                            <option v-if="!globalTaken" :value="null">Global (fallback for all vendors)</option>
+                            <option v-for="vendor in availableVendors" :key="vendor.id" :value="vendor.id">{{ vendor.name }} ({{ vendor.code }})</option>
                         </select>
+                        <p v-if="noneAvailable" class="mt-1 text-sm text-amber-600">
+                            Every vendor already has a template for this type â€” add a <span class="font-semibold">New Version</span> to the existing template instead.
+                        </p>
+                        <p v-else class="mt-1 text-xs text-slate-400">Vendors that already have a template for this type are hidden. Use New Version for other layouts.</p>
                         <p v-if="form.errors.vendor_id" class="mt-1 text-sm text-red-600">{{ form.errors.vendor_id }}</p>
                     </div>
                     <div>
@@ -143,7 +171,7 @@ const formatDate = (value) => (value ? new Date(value).toLocaleDateString() : 'â
                     <button type="button" class="rounded-xl px-5 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-100" @click="showCreate = false">
                         Cancel
                     </button>
-                    <button type="submit" :disabled="form.processing"
+                    <button type="submit" :disabled="form.processing || noneAvailable"
                         class="rounded-xl bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-600/20 hover:bg-emerald-700 disabled:opacity-50">
                         Create Template
                     </button>

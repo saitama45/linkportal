@@ -56,17 +56,34 @@ const form = ref({
         ?? extractionField('vendor_address')?.value ?? null,
 });
 
+// Line-item columns come from the template (custom names + unlimited count);
+// fall back to the five standard columns for manual / template-less documents.
+const DEFAULT_LINE_COLUMNS = [
+    { key: 'description', label: 'Description' },
+    { key: 'quantity', label: 'Quantity' },
+    { key: 'uom', label: 'UOM' },
+    { key: 'unit_price', label: 'Unit Price' },
+    { key: 'line_total', label: 'Line Total' },
+];
+const NUMERIC_LINE_KEYS = new Set(['quantity', 'unit_price', 'line_total']);
+const STANDARD_LINE_LABELS = { description: 'Description', quantity: 'Quantity', uom: 'UOM', unit_price: 'Unit Price', line_total: 'Line Total' };
+const lineColumnLabel = (col) => col.label
+    || STANDARD_LINE_LABELS[col.key]
+    || (col.key || '').replace(/_/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
+
+const lineItemColumns = computed(() => {
+    const cols = props.document.template_version?.annotations?.table?.columns;
+    if (cols?.length) return cols.map((c) => ({ key: c.key, label: lineColumnLabel(c) }));
+    return DEFAULT_LINE_COLUMNS;
+});
+
 const initialItems = () => {
     if (props.document.validated_line_items?.length) {
         return props.document.validated_line_items.map((item) => ({ ...item }));
     }
-    return (extraction.value?.line_items || []).map((row) => ({
-        description: row.cells?.description?.value ?? '',
-        quantity: row.cells?.quantity?.value ?? null,
-        uom: row.cells?.uom?.value ?? '',
-        unit_price: row.cells?.unit_price?.value ?? null,
-        line_total: row.cells?.line_total?.value ?? null,
-    }));
+    return (extraction.value?.line_items || []).map((row) => Object.fromEntries(
+        lineItemColumns.value.map((c) => [c.key, row.cells?.[c.key]?.value ?? (NUMERIC_LINE_KEYS.has(c.key) ? null : '')]),
+    ));
 };
 const lineItems = ref(initialItems());
 const dirty = ref(false);
@@ -169,9 +186,18 @@ const saveCorrections = () => {
         { preserveScroll: true, onSuccess: () => { dirty.value = false; } });
 };
 
-const markValidated = () => saveThen(() => {
-    router.put(route('document-intake.validate', props.document.id), {}, { preserveScroll: true });
-});
+const markValidated = async () => {
+    const ok = await confirm({
+        title: 'Mark as validated?',
+        message: 'This confirms the extracted fields and line items are correct, and makes the document ready to submit to Accounting.',
+        confirmButtonText: 'Mark Validated',
+        type: 'info',
+    });
+    if (! ok) return;
+    saveThen(() => {
+        router.put(route('document-intake.validate', props.document.id), {}, { preserveScroll: true });
+    });
+};
 
 const saveThen = (next) => {
     if (dirty.value) {
@@ -435,9 +461,11 @@ const typeLabel = computed(() => ({ invoice: 'Invoice', purchase_order: 'Purchas
                                         <p class="mt-1 text-sm text-slate-700">{{ exception.message }}</p>
                                     </div>
                                     <div v-if="canResolveExceptions" class="flex flex-shrink-0 gap-1.5">
-                                        <button type="button" class="rounded-lg bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700 hover:bg-emerald-100"
+                                        <button type="button" title="Mark as fixed and close it — won't be raised again for this document."
+                                            class="rounded-lg bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700 hover:bg-emerald-100"
                                             @click="resolveException(exception, 'resolved')">Resolve</button>
-                                        <button type="button" class="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600 hover:bg-slate-200"
+                                        <button type="button" title="Accept and proceed anyway (e.g. a known duplicate) — won't be raised again for this document."
+                                            class="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600 hover:bg-slate-200"
                                             @click="resolveException(exception, 'waived')">Waive</button>
                                     </div>
                                 </div>
@@ -466,6 +494,7 @@ const typeLabel = computed(() => ({ invoice: 'Invoice', purchase_order: 'Purchas
                 <div class="mt-6">
                     <IntakeLineItemsEditor
                         v-model="lineItems"
+                        :columns="lineItemColumns"
                         :extraction-rows="extraction?.line_items || []"
                         :readonly="!editable"
                         @update:model-value="dirty = true"

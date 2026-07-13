@@ -155,7 +155,10 @@ def _finalize_row(cells: dict, page_no: int, index: int) -> Optional[dict]:
         c for k, c in cells.items()
         if k != "description" and isinstance(c["value"], (int, float))
     ]
-    if not desc and not numerics:
+    # Standard templates anchor a row on its description or a numeric cell; a
+    # fully custom (all-text) template has neither, so fall back to any text.
+    any_text = any((c.get("raw_text") or "").strip() for c in cells.values())
+    if not desc and not numerics and not any_text:
         return None  # noise row
     all_words = [w for c in cells.values() for w in c["_words"]]
     non_empty = [c["confidence"] for c in cells.values() if c["raw_text"]]

@@ -294,10 +294,17 @@ class DocumentIntakeController extends Controller
             'submission_count' => $intakeDocument->submission_count + 1,
         ])->save();
 
-        \App\Jobs\SubmitDocumentReviewJob::dispatch($intakeDocument->id);
+        // Hand off immediately so the status advances without depending on a
+        // running queue worker; fall back to the queue (retry-with-backoff) if
+        // ghelpdesk is briefly unreachable.
+        try {
+            \App\Jobs\SubmitDocumentReviewJob::dispatchSync($intakeDocument->id);
+        } catch (\Throwable $e) {
+            \App\Jobs\SubmitDocumentReviewJob::dispatch($intakeDocument->id);
+        }
         AuditLogger::log('intake_document_submitted', $intakeDocument);
 
-        return redirect()->back()->with('success', 'Document queued for handoff to Accounting.');
+        return redirect()->back()->with('success', 'Document sent to Accounting for review.');
     }
 
     /** Assign vendor / document type for unmatched or unclassified documents. */

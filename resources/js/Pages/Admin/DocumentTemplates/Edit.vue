@@ -9,12 +9,28 @@ import AnnotationOverlay from '@/Components/Portal/Annotator/AnnotationOverlay.v
 import FieldPalette from '@/Components/Portal/Annotator/FieldPalette.vue';
 import TemplateTester from '@/Components/Portal/Annotator/TemplateTester.vue';
 import { usePdfDocument } from '@/Composables/usePdfDocument';
+import { useConfirm } from '@/Composables/useConfirm';
 import { ArrowLeftIcon, ArrowUturnLeftIcon, Bars3Icon, BeakerIcon, BookOpenIcon, CheckBadgeIcon, DocumentArrowUpIcon, PlusIcon, TrashIcon, XMarkIcon } from '@heroicons/vue/24/outline';
 
 const props = defineProps({
     template: { type: Object, required: true },
     canEdit: { type: Boolean, default: false },
+    canDelete: { type: Boolean, default: false },
 });
+
+const { confirm } = useConfirm();
+
+const deleteTemplate = async () => {
+    const ok = await confirm({
+        title: 'Delete Template',
+        message: `Delete "${props.template.name}"? This removes the template and all its versions. Documents already processed keep their extracted data.`,
+        confirmButtonText: 'Delete',
+        type: 'danger',
+    });
+    if (ok) {
+        router.delete(route('document-templates.destroy', props.template.id));
+    }
+};
 
 const STANDARD_FIELDS = [
     { key: 'invoice_no', label: 'Document No.', type: 'text', required: true },
@@ -33,7 +49,8 @@ const selectedVersionId = ref(
     (versions.value.find((v) => v.status === 'draft') || versions.value.find((v) => v.status === 'active') || versions.value[0])?.id ?? null,
 );
 const version = computed(() => versions.value.find((v) => v.id === selectedVersionId.value) || null);
-const editable = computed(() => props.canEdit && version.value?.status === 'draft');
+// Draft and active versions can be edited in place; superseded/archived are read-only.
+const editable = computed(() => props.canEdit && ['draft', 'active'].includes(version.value?.status));
 
 // ---- annotation state (local working copy) ----
 const fields = ref([]);
@@ -112,9 +129,12 @@ const onTableUpdate = (updated) => { if (!interacting) pushHistory(); table.valu
 const clearTable = () => { pushHistory(); table.value = null; dirty.value = true; };
 
 // ---- line-item column mapping ----
-// The extractor + validation expect these keys; users pick which one each
-// positional column holds so any vendor's left-to-right order can be matched.
-const COLUMN_KEYS = [
+// Columns are free-text and unlimited. The five standard names below carry
+// downstream semantics (numeric parsing for Quantity/Unit Price/Line Total,
+// Description as the row anchor) — typing one of them keeps that behaviour.
+// Any other name becomes a custom text column keyed by its slug and rides
+// through extraction → validation → the accounting handoff as-is.
+const STANDARD_COLUMNS = [
     { key: 'description', label: 'Description' },
     { key: 'quantity', label: 'Quantity' },
     { key: 'uom', label: 'UOM' },
@@ -122,10 +142,28 @@ const COLUMN_KEYS = [
     { key: 'line_total', label: 'Line Total' },
 ];
 
-const usedColumnKeys = computed(() => new Set((table.value?.columns || []).map((c) => c.key)));
+const slugify = (s) => (s || '').toString().toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 
-const setColumnKey = (index, key) => {
-    const columns = table.value.columns.map((c, i) => (i === index ? { ...c, key } : c));
+// A label matching a standard name keeps that standard key; anything else is
+// keyed by its slug so custom columns get a stable extraction key.
+const keyForLabel = (label, index) => {
+    const std = STANDARD_COLUMNS.find((c) => c.label.toLowerCase() === (label || '').trim().toLowerCase());
+    if (std) return std.key;
+    return slugify(label) || `column_${index + 1}`;
+};
+
+// Display label: explicit label wins; older templates stored only a key, so
+// humanize that (standard keys map back to their friendly name).
+const columnLabel = (col) => {
+    if (col.label) return col.label;
+    const std = STANDARD_COLUMNS.find((c) => c.key === col.key);
+    if (std) return std.label;
+    return (col.key || '').replace(/_/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
+};
+
+const setColumnLabel = (index, label) => {
+    const columns = table.value.columns.map((c, i) => (i === index ? { ...c, label, key: keyForLabel(label, i) } : c));
     onTableUpdate({ ...table.value, columns });
 };
 
@@ -139,11 +177,19 @@ const addColumn = () => {
     const columns = [...table.value.columns];
     const last = columns[columns.length - 1];
     const mid = (last.x0 + last.x1) / 2;
-    const unused = COLUMN_KEYS.find((k) => !usedColumnKeys.value.has(k.key))?.key;
-    if (!unused) return;
     columns[columns.length - 1] = { ...last, x1: mid };
-    columns.push({ key: unused, x0: mid, x1: last.x1 });
+    columns.push({ key: `column_${columns.length + 1}`, label: '', x0: mid, x1: last.x1 });
     onTableUpdate({ ...table.value, columns });
+};
+
+// Guarantee unique extraction keys on save even if two columns share a name.
+const dedupeColumnKeys = (columns) => {
+    const seen = {};
+    return (columns || []).map((c) => {
+        let key = c.key || 'column';
+        if (seen[key]) { seen[key] += 1; key = `${key}_${seen[key]}`; } else { seen[key] = 1; }
+        return { ...c, key };
+    });
 };
 
 // Drag a column row to reorder. The x-boundaries are fixed positional slots
@@ -160,25 +206,42 @@ const onColumnDrop = (index) => {
     const from = dragColumnIndex.value;
     dragColumnIndex.value = null;
     if (from === null || from === index) return;
-    const cols = table.value.columns;
-    const keys = cols.map((c) => c.key);
-    const [moved] = keys.splice(from, 1);
-    keys.splice(index, 0, moved);
-    const columns = cols.map((c, i) => ({ ...c, key: keys[i] }));
+    // x-boundaries are fixed positional slots (they trace the document); the
+    // key+label mapping moves with the row and is reassigned to the slots.
+    const xs = table.value.columns.map((c) => ({ x0: c.x0, x1: c.x1 }));
+    const cols = [...table.value.columns];
+    const [moved] = cols.splice(from, 1);
+    cols.splice(index, 0, moved);
+    const columns = cols.map((c, i) => ({ ...c, x0: xs[i].x0, x1: xs[i].x1 }));
     onTableUpdate({ ...table.value, columns });
 };
 
 const annotationsPayload = computed(() => ({
     schema: 1,
     fields: fields.value,
-    table: table.value,
+    table: table.value ? { ...table.value, columns: dedupeColumnKeys(table.value.columns) } : null,
 }));
 
 // ---- actions ----
-const save = () => {
+const persistAnnotations = () => {
     router.put(route('document-templates.versions.update', [props.template.id, version.value.id]),
         { annotations: annotationsPayload.value },
         { preserveScroll: true, onSuccess: () => { dirty.value = false; } });
+};
+
+const save = async () => {
+    // Editing the live (active) version affects extraction on the next run — confirm first.
+    if (version.value?.status === 'active') {
+        const ok = await confirm({
+            title: 'Save to the live template?',
+            message: 'This version is Active, so your changes take effect on the very next OCR run. Run Test Extract first if you want to preview the result before saving.',
+            confirmButtonText: 'Save to live',
+            cancelButtonText: 'Keep editing',
+            type: 'warning',
+        });
+        if (!ok) return;
+    }
+    persistAnnotations();
 };
 
 const activate = () => {
@@ -288,11 +351,17 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
                         @click="save">
                         Save Annotations
                     </button>
-                    <button v-if="editable" type="button"
+                    <button v-if="editable && version?.status === 'draft'" type="button"
                         class="flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-indigo-600/20 transition-all hover:bg-indigo-700"
                         @click="activate">
                         <CheckBadgeIcon class="h-4 w-4" />
                         Activate
+                    </button>
+                    <button v-if="canDelete" type="button"
+                        class="flex items-center gap-1.5 rounded-xl border border-red-200 px-4 py-2 text-sm font-semibold text-red-600 transition-all hover:bg-red-50"
+                        @click="deleteTemplate">
+                        <TrashIcon class="h-4 w-4" />
+                        Delete
                     </button>
                 </div>
             </div>
@@ -300,6 +369,12 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
 
         <div class="py-6">
             <div class="mx-auto max-w-[110rem] px-4 sm:px-6">
+                <div v-if="editable && version?.status === 'active'"
+                    class="mb-4 flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    <BeakerIcon class="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-500" />
+                    <p>You're editing the <span class="font-semibold">live (Active)</span> version — changes take effect on the next OCR run. Use <span class="font-semibold">Test Extract</span> to preview before you <span class="font-semibold">Save Annotations</span>.</p>
+                </div>
+
                 <div v-if="!version" class="rounded-2xl border border-dashed border-slate-300 bg-white p-16 text-center">
                     <DocumentArrowUpIcon class="mx-auto h-12 w-12 text-slate-300" />
                     <p class="mt-3 font-semibold text-slate-700">Upload a sample document to start annotating</p>
@@ -422,14 +497,10 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
                                         <Bars3Icon class="h-4 w-4" />
                                     </span>
                                     <span class="w-4 text-center text-xs font-bold text-slate-400">{{ index + 1 }}</span>
-                                    <select :value="col.key" :disabled="!editable"
+                                    <input :value="columnLabel(col)" :disabled="!editable" type="text"
+                                        list="standard-column-names" placeholder="Column name"
                                         class="min-w-0 flex-1 rounded-lg border-slate-300 text-xs focus:border-indigo-500 focus:ring-indigo-500/30"
-                                        @change="setColumnKey(index, $event.target.value)">
-                                        <option v-for="opt in COLUMN_KEYS" :key="opt.key" :value="opt.key"
-                                            :disabled="opt.key !== col.key && usedColumnKeys.has(opt.key)">
-                                            {{ opt.label }}
-                                        </option>
-                                    </select>
+                                        @input="setColumnLabel(index, $event.target.value)" />
                                     <button v-if="editable && table.columns.length > 1" type="button"
                                         class="flex-shrink-0 rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-500"
                                         title="Remove column" @click="removeColumn(index)">
@@ -437,12 +508,15 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
                                     </button>
                                 </div>
                             </div>
-                            <button v-if="editable && table.columns.length < COLUMN_KEYS.length" type="button"
+                            <datalist id="standard-column-names">
+                                <option v-for="opt in STANDARD_COLUMNS" :key="opt.key" :value="opt.label" />
+                            </datalist>
+                            <button v-if="editable" type="button"
                                 class="mt-2 flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:text-indigo-700"
                                 @click="addColumn">
                                 <PlusIcon class="h-3.5 w-3.5" /> Add column
                             </button>
-                            <p class="mt-2 text-[11px] text-slate-400">Match each column to the value in that position of the document. Drag the vertical dividers on the page to adjust boundaries.</p>
+                            <p class="mt-2 text-[11px] text-slate-400">Name each column as it appears on the document. <b>Description</b>, <b>Quantity</b>, <b>UOM</b>, <b>Unit Price</b> and <b>Line Total</b> are recognised for totals &amp; parsing; any other name is kept as a custom column. Drag the vertical dividers on the page to adjust boundaries.</p>
                             <label class="mt-3 flex items-center gap-2 text-sm text-slate-600">
                                 <input type="checkbox" :checked="table.repeat_on_following_pages" :disabled="!editable"
                                     class="h-4 w-4 rounded border-slate-300 text-indigo-600"

@@ -38,7 +38,7 @@ class SubmitDocumentReviewJob implements ShouldQueue
 
     public function handle(GhelpdeskClient $client): void
     {
-        $document = IntakeDocument::with(['vendor', 'company:id,name', 'latestExtraction', 'openExceptions'])
+        $document = IntakeDocument::with(['vendor', 'company:id,name', 'latestExtraction', 'openExceptions', 'templateVersion'])
             ->findOrFail($this->intakeDocumentId);
 
         if (! in_array($document->status, [IntakeDocument::STATUS_SENDING, IntakeDocument::STATUS_HANDOFF_FAILED], true)) {
@@ -78,6 +78,10 @@ class SubmitDocumentReviewJob implements ShouldQueue
             'external_status' => 'pending',
             'status' => IntakeDocument::STATUS_PENDING_EXTERNAL_REVIEW,
         ])->save();
+
+        // A prior failed attempt leaves an open failed_handoff exception; clear it
+        // so it doesn't ride along as a stale warning on the next payload.
+        app(DocumentExceptionService::class)->resolveByRule($document, 'failed_handoff', $document->submitted_by, 'handoff_succeeded');
 
         $document->recordEvent('submitted', 'Sent to Accounting for review', [
             'external_review_id' => $document->external_review_id,
@@ -143,8 +147,9 @@ class SubmitDocumentReviewJob implements ShouldQueue
                 'subtotal' => $document->subtotal,
                 'tax_amount' => $document->tax_amount,
                 'total_amount' => $document->total_amount,
-            ] + ($document->validated_fields ?? []),
-            'line_items' => $document->validated_line_items ?? [],
+            ] + $document->resolvedFields(),
+            'line_items' => $document->resolvedLineItems(),
+            'line_item_columns' => $document->lineItemColumns(),
             'confidence' => [
                 'overall' => $document->overall_confidence,
                 'fields' => collect($extraction?->header_fields ?? [])
