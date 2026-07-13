@@ -89,6 +89,12 @@ else
   echo "[entrypoint] Skipping migrations (RUN_MIGRATIONS_ON_STARTUP is not 'true')."
 fi
 
+# Diagnostic: confirm the container actually received the integration env vars
+# (they're baked into the config cache below). If these print NO, the App Setting
+# is not reaching this container — the handoff will throw "GHELPDESK_URL is not
+# configured" regardless of what the portal shows. Values are masked.
+echo "[entrypoint] Integration env check: GHELPDESK_URL=$([ -n "${GHELPDESK_URL:-}" ] && echo "set (len ${#GHELPDESK_URL})" || echo NO) | GHELPDESK_API_TOKEN=$([ -n "${GHELPDESK_API_TOKEN:-}" ] && echo "set (len ${#GHELPDESK_API_TOKEN})" || echo NO)"
+
 # Build caches with the runtime environment now available.
 echo "[entrypoint] Caching config / routes / views..."
 php artisan config:clear --quiet || true
