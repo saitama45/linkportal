@@ -156,7 +156,12 @@ class SubmitDocumentReviewJob implements ShouldQueue
                     ->mapWithKeys(fn ($f) => [$f['key'] => $f['confidence'] ?? null])
                     ->all(),
             ],
+            // `failed_handoff` is an internal linkportal mechanism exception about
+            // a prior send attempt — never a document-data concern. Exclude it so a
+            // now-successful handoff doesn't ship its own obsolete failure as a
+            // warning to accounting.
             'exceptions' => $document->openExceptions
+                ->reject(fn ($e) => $e->rule_key === 'failed_handoff')
                 ->map(fn ($e) => ['rule_key' => $e->rule_key, 'severity' => $e->severity, 'message' => $e->message])
                 ->values()
                 ->all(),
