@@ -22,6 +22,13 @@ class DocumentExceptionRuleSeeder extends Seeder
              'config' => []],
             ['rule_key' => 'po_mismatch', 'label' => 'PO number not found for vendor', 'severity' => 'warning',
              'config' => []],
+            ['rule_key' => 'po_line_mismatch', 'label' => 'Invoice line items differ from the PO', 'severity' => 'warning',
+             'config' => ['price_tolerance' => 0.02]],
+            ['rule_key' => 'po_amount_exceeded', 'label' => 'Invoice exceeds the PO amount', 'severity' => 'blocker',
+             'config' => ['tolerance' => 0.01]],
+            // validity_days null = POs never expire (default). Set a number to enforce a window.
+            ['rule_key' => 'po_expired', 'label' => 'Invoice bills an expired PO', 'severity' => 'warning',
+             'config' => ['validity_days' => null]],
             ['rule_key' => 'total_mismatch', 'label' => 'Line items do not reconcile with totals', 'severity' => 'warning',
              'config' => ['tolerance' => 0.05]],
             ['rule_key' => 'vendor_inactive', 'label' => 'Vendor is not active', 'severity' => 'blocker',
@@ -42,6 +49,8 @@ class DocumentExceptionRuleSeeder extends Seeder
              'config' => []],
             ['rule_key' => 'overdue_review', 'label' => 'External review overdue', 'severity' => 'warning',
              'config' => ['overdue_days' => 3]],
+            ['rule_key' => 'po_awaiting_invoice_overdue', 'label' => 'Approved PO unbilled past aging threshold', 'severity' => 'warning',
+             'config' => ['overdue_days' => 7]],
         ];
 
         foreach ($rules as $rule) {

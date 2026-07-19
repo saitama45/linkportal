@@ -132,6 +132,43 @@ def _has_anchor(cells: dict, anchor_keys: list) -> bool:
     return any(isinstance(cells.get(k, {}).get("value"), (int, float)) for k in anchor_keys)
 
 
+def _fill_empty_cells(page: fitz.Page, cells: dict, columns: list, line: List[Word],
+                       lang: str, dpi: int, dayfirst: bool, table_bbox: List[float]) -> None:
+    """A single OCR pass over the whole row can miss an isolated short value
+    (e.g. a lone quantity digit) even while correctly reading the row's
+    richer cells — the default page-segmentation mode expects paragraph-like
+    structure and under-detects sparse content surrounded by whitespace.
+    Re-OCR just the still-empty column(s) as a fallback, narrowed to this
+    row's own line height and clamped inside the table's annotated bounds so
+    it can never bleed into a header band or an adjacent row.
+    """
+    if not line:
+        return
+    y0 = max(table_bbox[1], min(w.bbox[1] for w in line))
+    y1 = min(table_bbox[3], max(w.bbox[3] for w in line))
+    if y1 <= y0:
+        y0, y1 = table_bbox[1], table_bbox[3]
+    for col in columns:
+        cell = cells.get(col["key"])
+        if not cell or cell["raw_text"]:
+            continue
+        bbox = [col["x0"], y0, col["x1"], y1]
+        # A narrow, mostly-blank crop is prone to a stray low-confidence
+        # "blob" reading (e.g. a hairline row border) alongside the real
+        # value — hold this fallback pass to a higher confidence floor than
+        # the primary pass to avoid stitching noise onto a genuine read.
+        words = [w for w in ocr_words(page, bbox, lang=lang, dpi=dpi) if w.confidence >= 0.6]
+        text = _joined_text(words).replace("\n", " ").strip()
+        if not text:
+            continue
+        col_type = col.get("type") or COLUMN_TYPE_DEFAULTS.get(col["key"], "text")
+        value, _ok = normalize_value(text, col_type, dayfirst=dayfirst)
+        cell["value"] = value
+        cell["raw_text"] = text
+        cell["confidence"] = _mean_confidence(words)
+        cell["_words"] = words
+
+
 def _merge_continuation(base: dict, extra: dict, columns: list, dayfirst: bool) -> None:
     """Append a wrapped line's text into the row it belongs to (text columns only)."""
     for col in columns:
@@ -194,6 +231,8 @@ def _extract_table(doc: fitz.Document, table: dict, meta: list, lang: str, dpi: 
             cells = _cells_for_line(line, columns, dayfirst)
             if not any(c["raw_text"] for c in cells.values()):
                 continue
+            if not has_text:
+                _fill_empty_cells(page, cells, columns, line, lang, dpi, dayfirst, table["bbox"])
             if anchor_keys and _has_anchor(cells, anchor_keys):
                 grouped.append(cells)
                 open_row = cells

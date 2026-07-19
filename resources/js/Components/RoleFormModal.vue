@@ -219,16 +219,6 @@ const sidebarPermissionMap = [
             { category: 'Vendors', label: 'Vendors' },
             { category: 'Vendor Documents', label: 'Vendor Documents' },
             { category: 'Products', label: 'Products' },
-            { category: 'Approvals Inbox', label: 'Approvals Inbox' },
-        ],
-    },
-    {
-        label: 'Transactions',
-        description: 'Commercial documents submitted and reviewed through the portal.',
-        children: [
-            { category: 'Invoices', label: 'Invoices' },
-            { category: 'Purchase Orders', label: 'Purchase Orders' },
-            { category: 'Quotations', label: 'Quotations' },
         ],
     },
     {

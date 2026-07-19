@@ -12,20 +12,14 @@ from ..config import get_settings
 from ..pdfio import Word, render_clip
 
 
-def ocr_words(page: fitz.Page, bbox: List[float], lang: str, dpi: int) -> List[Word]:
-    settings = get_settings()
-    pytesseract.pytesseract.tesseract_cmd = settings.tesseract_cmd
-
-    img, clip = render_clip(page, bbox, dpi)
-    data = pytesseract.image_to_data(img, lang=lang, output_type=pytesseract.Output.DICT)
-
-    page_w, page_h = page.rect.width, page.rect.height
-    scale = 72.0 / dpi  # image px -> PDF points
+def _words_from_image(img, clip: fitz.Rect, page_w: float, page_h: float, scale: float,
+                       lang: str, config: str = "", min_conf: float = 0) -> List[Word]:
+    data = pytesseract.image_to_data(img, lang=lang, config=config, output_type=pytesseract.Output.DICT)
     words: List[Word] = []
     for i, text in enumerate(data["text"]):
         text = text.strip()
         conf = float(data["conf"][i])
-        if not text or conf < 0:
+        if not text or conf < 0 or conf < min_conf:
             continue
         x0 = clip.x0 + data["left"][i] * scale
         y0 = clip.y0 + data["top"][i] * scale
@@ -38,6 +32,29 @@ def ocr_words(page: fitz.Page, bbox: List[float], lang: str, dpi: int) -> List[W
                   round(x1 / page_w, 5), round(y1 / page_h, 5)],
         ))
     return words
+
+
+def ocr_words(page: fitz.Page, bbox: List[float], lang: str, dpi: int) -> List[Word]:
+    """OCR a page region. The default page-segmentation mode expects
+    paragraph-like structure and reliably reads multi-word regions (a
+    description cell, a header field), but it frequently finds nothing in a
+    crop containing just one short value — e.g. a quantity column with a
+    single digit and lots of surrounding whitespace. When the default pass
+    comes back empty, retry once as a single text block (psm 6), which
+    handles sparse crops much better but is noisier, so its guesses are held
+    to a confidence floor rather than trusted outright.
+    """
+    settings = get_settings()
+    pytesseract.pytesseract.tesseract_cmd = settings.tesseract_cmd
+
+    img, clip = render_clip(page, bbox, dpi)
+    page_w, page_h = page.rect.width, page.rect.height
+    scale = 72.0 / dpi  # image px -> PDF points
+
+    words = _words_from_image(img, clip, page_w, page_h, scale, lang)
+    if words:
+        return words
+    return _words_from_image(img, clip, page_w, page_h, scale, lang, config="--psm 6", min_conf=50)
 
 
 def tesseract_version() -> str:

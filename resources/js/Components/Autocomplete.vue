@@ -199,7 +199,7 @@ onBeforeUnmount(() => {
             >
 
             <button
-                v-if="modelValue && !disabled"
+                v-if="modelValue && !disabled && !required"
                 type="button"
                 class="mr-1 rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
                 title="Clear selection"

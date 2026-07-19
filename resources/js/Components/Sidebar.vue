@@ -5,18 +5,14 @@ import {
     ArrowLeftOnRectangleIcon,
     BuildingOffice2Icon,
     BuildingStorefrontIcon,
-    CheckBadgeIcon,
     ChevronDownIcon,
     BanknotesIcon,
-    ClipboardDocumentListIcon,
     CubeIcon,
     DocumentMagnifyingGlassIcon,
-    DocumentTextIcon,
     ExclamationTriangleIcon,
     InboxArrowDownIcon,
     IdentificationIcon,
     LinkIcon,
-    ReceiptPercentIcon,
     Squares2X2Icon,
     UserGroupIcon,
 } from '@heroicons/vue/24/outline';
@@ -33,7 +29,6 @@ const user = computed(() => page.props.auth?.user || {});
 const { hasPermission } = usePermission();
 const managementOpen = ref(true);
 const vendorsOpen = ref(true);
-const transactionsOpen = ref(true);
 const documentsOpen = ref(true);
 
 const isActive = (...patterns) => patterns.some((pattern) => route().current(pattern));
@@ -104,63 +99,12 @@ const iconClass = [
                             <span v-if="!isCollapsed" class="text-xs font-semibold">Vendor Directory</span>
                         </Link>
                         <Link
-                            v-if="hasPermission('approvals.view')"
-                            :href="route('approvals.index')"
-                            :class="linkClass(isActive('approvals.*'))"
-                        >
-                            <CheckBadgeIcon :class="isCollapsed ? 'mx-auto h-5 w-5' : 'mr-3 h-4 w-4'" />
-                            <span v-if="!isCollapsed" class="text-xs font-semibold">Approvals Inbox</span>
-                        </Link>
-                        <Link
                             v-if="hasPermission('products.view')"
                             :href="route('products.index')"
                             :class="linkClass(isActive('products.*'))"
                         >
                             <CubeIcon :class="isCollapsed ? 'mx-auto h-5 w-5' : 'mr-3 h-4 w-4'" />
                             <span v-if="!isCollapsed" class="text-xs font-semibold">Products</span>
-                        </Link>
-                    </div>
-                </div>
-
-                <!-- Transactions group -->
-                <div class="mt-6">
-                    <button
-                        type="button"
-                        class="group flex w-full items-center rounded-lg px-3 py-2.5 text-emerald-50/55 transition hover:bg-white/5 hover:text-white"
-                        @click="transactionsOpen = !transactionsOpen"
-                    >
-                        <ReceiptPercentIcon :class="iconClass" />
-                        <span v-if="!isCollapsed" class="flex-1 text-left text-sm font-semibold">Transactions</span>
-                        <ChevronDownIcon
-                            v-if="!isCollapsed"
-                            :class="['h-4 w-4 transition', transactionsOpen ? 'rotate-180' : '']"
-                        />
-                    </button>
-
-                    <div v-if="transactionsOpen || isCollapsed" class="mt-1 space-y-1" :class="isCollapsed ? '' : 'pl-4'">
-                        <Link
-                            v-if="hasPermission('invoices.view')"
-                            :href="route('invoices.index')"
-                            :class="linkClass(isActive('invoices.*'))"
-                        >
-                            <ReceiptPercentIcon :class="isCollapsed ? 'mx-auto h-5 w-5' : 'mr-3 h-4 w-4'" />
-                            <span v-if="!isCollapsed" class="text-xs font-semibold">Invoices</span>
-                        </Link>
-                        <Link
-                            v-if="hasPermission('purchase-orders.view')"
-                            :href="route('purchase-orders.index')"
-                            :class="linkClass(isActive('purchase-orders.*'))"
-                        >
-                            <ClipboardDocumentListIcon :class="isCollapsed ? 'mx-auto h-5 w-5' : 'mr-3 h-4 w-4'" />
-                            <span v-if="!isCollapsed" class="text-xs font-semibold">Purchase Orders</span>
-                        </Link>
-                        <Link
-                            v-if="hasPermission('quotations.view')"
-                            :href="route('quotations.index')"
-                            :class="linkClass(isActive('quotations.*'))"
-                        >
-                            <DocumentTextIcon :class="isCollapsed ? 'mx-auto h-5 w-5' : 'mr-3 h-4 w-4'" />
-                            <span v-if="!isCollapsed" class="text-xs font-semibold">Quotations</span>
                         </Link>
                     </div>
                 </div>

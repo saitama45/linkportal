@@ -56,6 +56,7 @@ const emitTable = (patch) => {
 const orderedBbox = (a, b) => [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])];
 
 const startDraw = (event) => {
+    if (event.button !== 0) return; // left button only — right button pans the document
     if (props.readonly || drag.value) return;
     if (props.mode === 'field' && !props.selectedFieldKey) return;
     if (!['field', 'table'].includes(props.mode)) return;
@@ -67,6 +68,7 @@ const startDraw = (event) => {
 };
 
 const startMove = (event, kind, key = null) => {
+    if (event.button !== 0) return;
     if (props.readonly) return;
     event.stopPropagation();
     const [x, y] = toNorm(event);
@@ -78,6 +80,7 @@ const startMove = (event, kind, key = null) => {
 };
 
 const startResize = (event, kind, corner, key = null) => {
+    if (event.button !== 0) return;
     if (props.readonly) return;
     event.stopPropagation();
     const bbox = kind === 'table' ? props.table.bbox : props.fields.find((f) => f.key === key)?.bbox;
@@ -87,6 +90,7 @@ const startResize = (event, kind, corner, key = null) => {
 };
 
 const startColumnDrag = (event, colIndex) => {
+    if (event.button !== 0) return;
     if (props.readonly) return;
     event.stopPropagation();
     emit('mutate-start');

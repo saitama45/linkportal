@@ -7,6 +7,7 @@ use App\Http\Services\AuditLogger;
 use App\Http\Services\DocumentIntakeService;
 use App\Models\IntakeDocument;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 
 /**
@@ -30,14 +31,83 @@ class DocumentUploadController extends Controller
             $query->where(function ($q) use ($request) {
                 $q->where('reference_no', 'like', "%{$request->search}%")
                     ->orWhere('original_filename', 'like', "%{$request->search}%")
-                    ->orWhere('invoice_no', 'like', "%{$request->search}%");
+                    ->orWhere('invoice_no', 'like', "%{$request->search}%")
+                    ->orWhere('po_number', 'like', "%{$request->search}%");
             });
         }
+        if (in_array($request->document_type, IntakeDocument::DOCUMENT_TYPES, true)) {
+            $query->where('document_type', $request->document_type);
+        }
+        if ($request->filled('status')) {
+            $query->where('status', $request->status);
+        }
+
+        $documents = $query->paginate(20)->withQueryString();
+        $this->attachPoFulfillment($documents->getCollection(), $vendor->id);
 
         return Inertia::render('Vendor/DocumentUploads/Index', [
-            'documents' => Inertia::scroll($query->paginate(20)->withQueryString()),
-            'filters' => $request->only(['search']),
+            'documents' => Inertia::scroll($documents),
+            'filters' => $request->only(['search', 'document_type', 'status']),
+            'documentTypes' => IntakeDocument::DOCUMENT_TYPES,
         ]);
+    }
+
+    /**
+     * Tag each approved purchase-order row on this page with its fulfillment
+     * ('open' | 'partially_invoiced' | 'fully_invoiced'). One grouped query
+     * covers the whole page rather than a per-row lookup.
+     */
+    private function attachPoFulfillment($documents, int $vendorId): void
+    {
+        $poNumbers = $documents
+            ->filter(fn ($d) => $d->document_type === 'purchase_order'
+                && $d->status === IntakeDocument::STATUS_APPROVED
+                && $d->po_number)
+            ->pluck('po_number')
+            ->unique();
+
+        if ($poNumbers->isEmpty()) {
+            return;
+        }
+
+        // Sum billed (non-cancelled/rejected invoices) per PO number, this vendor.
+        // No ->with() here: the primary key isn't selected under group-by, so an
+        // eager load would silently null out relations — aggregate only.
+        $billed = IntakeDocument::query()
+            ->where('vendor_id', $vendorId)
+            ->where('document_type', 'invoice')
+            ->whereIn('po_number', $poNumbers)
+            ->whereNotIn('status', [IntakeDocument::STATUS_CANCELLED, IntakeDocument::STATUS_REJECTED])
+            ->groupBy('po_number')
+            ->select('po_number', DB::raw('SUM(total_amount) as billed'))
+            ->pluck('billed', 'po_number');
+
+        $validityDays = IntakeDocument::poValidityDays();
+
+        foreach ($documents as $doc) {
+            if ($doc->document_type !== 'purchase_order'
+                || $doc->status !== IntakeDocument::STATUS_APPROVED
+                || ! $doc->po_number) {
+                continue;
+            }
+
+            $billedForPo = (float) ($billed[$doc->po_number] ?? 0);
+            $poTotal = (float) ($doc->total_amount ?? 0);
+            $fullyInvoiced = $poTotal > 0 && $billedForPo >= $poTotal * 0.99;
+
+            // Expiry only matters while there is still something to bill.
+            $expired = ! $fullyInvoiced
+                && $validityDays
+                && $doc->external_decided_at
+                && $doc->external_decided_at->lt(now()->subDays($validityDays));
+
+            $doc->fulfillment = match (true) {
+                $expired => 'expired',
+                $billedForPo <= 0 => 'open',
+                $fullyInvoiced => 'fully_invoiced',
+                default => 'partially_invoiced',
+            };
+        }
     }
 
     public function create()

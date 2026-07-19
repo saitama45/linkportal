@@ -11,10 +11,8 @@ import {
     BanknotesIcon,
     Bars3Icon,
     ChevronDownIcon,
-    ClipboardDocumentListIcon,
     DocumentTextIcon,
     LinkIcon,
-    ReceiptPercentIcon,
     Squares2X2Icon,
     UserCircleIcon,
     XMarkIcon,
@@ -41,9 +39,6 @@ watch(() => page.props.flash, (flash) => {
 
 const nav = [
     { label: 'Dashboard', route: 'vendor.dashboard', active: 'vendor.dashboard', icon: Squares2X2Icon },
-    { label: 'Invoices', route: 'vendor.invoices.index', active: 'vendor.invoices.*', icon: ReceiptPercentIcon },
-    { label: 'Purchase Orders', route: 'vendor.purchase-orders.index', active: 'vendor.purchase-orders.*', icon: ClipboardDocumentListIcon },
-    { label: 'Quotations', route: 'vendor.quotations.index', active: 'vendor.quotations.*', icon: DocumentTextIcon },
     { label: 'Uploads', route: 'vendor.document-uploads.index', active: 'vendor.document-uploads.*', icon: ArrowUpTrayIcon },
     { label: 'Payments', route: 'vendor.accounts-payable.index', active: 'vendor.accounts-payable.*', icon: BanknotesIcon },
     { label: 'Documents', route: 'vendor.documents.index', active: 'vendor.documents.*', icon: DocumentTextIcon },

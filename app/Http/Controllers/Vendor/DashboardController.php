@@ -3,10 +3,8 @@
 namespace App\Http\Controllers\Vendor;
 
 use App\Http\Controllers\Controller;
-use App\Models\Invoice;
+use App\Models\IntakeDocument;
 use App\Models\PortalNotification;
-use App\Models\PurchaseOrder;
-use App\Models\Quotation;
 use App\Models\VendorDocument;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -19,10 +17,8 @@ class DashboardController extends Controller
 
         return Inertia::render('Vendor/Dashboard', [
             'stats' => [
-                'invoices' => Invoice::forVendor($vendor->id)->count(),
-                'invoices_pending' => Invoice::forVendor($vendor->id)->pendingApproval()->count(),
-                'purchase_orders' => PurchaseOrder::forVendor($vendor->id)->count(),
-                'quotations' => Quotation::forVendor($vendor->id)->count(),
+                'uploads' => IntakeDocument::forVendor($vendor->id)->count(),
+                'uploads_returned' => IntakeDocument::forVendor($vendor->id)->where('status', IntakeDocument::STATUS_RETURNED)->count(),
                 'documents' => VendorDocument::where('vendor_id', $vendor->id)->count(),
                 'documents_pending' => VendorDocument::where('vendor_id', $vendor->id)->where('status', 'pending')->count(),
             ],

@@ -15,6 +15,7 @@ import {
 
 const props = defineProps({
     document: { type: Object, required: true },
+    poMatch: { type: Object, default: null },
     vendors: { type: Array, default: () => [] },
     documentTypes: { type: Array, default: () => [] },
     canValidate: { type: Boolean, default: false },
@@ -22,6 +23,22 @@ const props = defineProps({
     canResolveExceptions: { type: Boolean, default: false },
     canDelete: { type: Boolean, default: false },
 });
+
+// ---- PO reconciliation display ----
+const fulfillmentLabel = {
+    open: 'Open',
+    partially_invoiced: 'Partially Invoiced',
+    fully_invoiced: 'Fully Invoiced',
+};
+const fulfillmentClass = {
+    open: 'bg-slate-100 text-slate-600',
+    partially_invoiced: 'bg-amber-100 text-amber-700',
+    fully_invoiced: 'bg-emerald-100 text-emerald-700',
+};
+const invoiceStatusLabel = (status) => (status || '').replaceAll('_', ' ');
+// PO figures can legitimately be absent (a PO with no extracted header total);
+// show a dash rather than 0.00 so "unknown" reads differently from "nothing".
+const poMoney = (value) => (value == null ? '—' : Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 
 const { confirm } = useConfirm();
 
@@ -438,6 +455,71 @@ const typeLabel = computed(() => ({ invoice: 'Invoice', purchase_order: 'Purchas
                                         @focus="focusField(field.key)"
                                         @input="dirty = true" />
                                 </div>
+                            </div>
+                        </div>
+
+                        <!-- PO reconciliation -->
+                        <div v-if="poMatch" class="rounded-2xl border border-indigo-100 bg-indigo-50/40 p-5 shadow-sm">
+                            <div class="flex items-center justify-between gap-2">
+                                <h3 class="text-xs font-bold uppercase tracking-widest text-indigo-600">
+                                    {{ poMatch.role === 'invoice' ? 'Billed Against PO' : 'PO Fulfillment' }}
+                                </h3>
+                                <div class="flex items-center gap-1.5">
+                                    <span v-if="poMatch.expired" class="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold uppercase text-red-700">
+                                        Expired
+                                    </span>
+                                    <span :class="['rounded-full px-2 py-0.5 text-[10px] font-bold uppercase', fulfillmentClass[poMatch.fulfillment]]">
+                                        {{ fulfillmentLabel[poMatch.fulfillment] }}
+                                    </span>
+                                </div>
+                            </div>
+
+                            <p v-if="poMatch.role === 'invoice'" class="mt-2 text-sm text-slate-700">
+                                Matched to PO
+                                <Link :href="route('document-intake.show', poMatch.po_id)" class="font-bold text-indigo-700 hover:underline">
+                                    {{ poMatch.po_number }}
+                                </Link>
+                                <span class="text-slate-400">({{ poMatch.po_reference_no }})</span>
+                                <span v-if="poMatch.link === 'locked'"
+                                    class="ml-1 rounded bg-indigo-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-indigo-600"
+                                    title="Link locked in at validation — stable if the PO number is later edited">
+                                    Locked
+                                </span>
+                            </p>
+                            <p v-else class="mt-2 text-sm text-slate-700">
+                                {{ poMatch.invoice_count }} invoice{{ poMatch.invoice_count === 1 ? '' : 's' }} billed against this PO.
+                            </p>
+
+                            <dl class="mt-3 grid grid-cols-3 gap-2 text-center">
+                                <div class="rounded-xl bg-white p-2.5">
+                                    <dt class="text-[10px] font-bold uppercase tracking-wider text-slate-400">PO Total</dt>
+                                    <dd class="mt-0.5 text-sm font-black tabular-nums text-slate-900">{{ poMoney(poMatch.po_total) }}</dd>
+                                </div>
+                                <div class="rounded-xl bg-white p-2.5">
+                                    <dt class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Invoiced</dt>
+                                    <dd class="mt-0.5 text-sm font-black tabular-nums text-slate-900">{{ poMoney(poMatch.invoiced_to_date) }}</dd>
+                                </div>
+                                <div class="rounded-xl bg-white p-2.5">
+                                    <dt class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Remaining</dt>
+                                    <dd :class="['mt-0.5 text-sm font-black tabular-nums', poMatch.remaining_balance < 0 ? 'text-red-600' : 'text-slate-900']">
+                                        {{ poMoney(poMatch.remaining_balance) }}
+                                    </dd>
+                                </div>
+                            </dl>
+
+                            <!-- Invoices billed against this PO (partial-invoicing trail) -->
+                            <div v-if="poMatch.role === 'purchase_order' && poMatch.invoices?.length" class="mt-3 border-t border-indigo-100 pt-3">
+                                <p class="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">Invoices billed</p>
+                                <ul class="space-y-1">
+                                    <li v-for="inv in poMatch.invoices" :key="inv.id"
+                                        class="flex items-center justify-between gap-2 rounded-lg bg-white px-2.5 py-1.5 text-xs">
+                                        <Link :href="route('document-intake.show', inv.id)" class="min-w-0 flex-1 truncate font-semibold text-indigo-700 hover:underline">
+                                            {{ inv.invoice_no || inv.reference_no }}
+                                        </Link>
+                                        <span class="rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-slate-500">{{ invoiceStatusLabel(inv.status) }}</span>
+                                        <span class="tabular-nums font-black text-slate-900">{{ poMoney(inv.total_amount) }}</span>
+                                    </li>
+                                </ul>
                             </div>
                         </div>
 

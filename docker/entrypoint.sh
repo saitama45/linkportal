@@ -55,6 +55,8 @@ php artisan migrate --path=database/migrations/portal/2026_07_12_000001_create_p
   || echo "[entrypoint] WARNING: intake-line-items migration failed."
 php artisan migrate --path=database/migrations/portal/2026_07_13_000001_add_extra_to_portal_intake_line_items.php --force \
   || echo "[entrypoint] WARNING: intake-line-items extra-column migration failed."
+php artisan migrate --path=database/migrations/portal/2026_07_18_000001_add_matched_po_to_portal_intake_documents.php --force \
+  || echo "[entrypoint] WARNING: matched-po column migration failed."
 php artisan db:seed --class=DocumentExceptionRuleSeeder --force \
   || echo "[entrypoint] WARNING: exception-rule seed failed."
 

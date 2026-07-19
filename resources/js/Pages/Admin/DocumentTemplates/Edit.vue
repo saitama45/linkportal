@@ -1,22 +1,93 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
-import { Head, Link, router } from '@inertiajs/vue3';
+import { Head, Link, router, useForm } from '@inertiajs/vue3';
 import axios from 'axios';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import StatusBadge from '@/Components/Portal/StatusBadge.vue';
+import Modal from '@/Components/Modal.vue';
+import Autocomplete from '@/Components/Autocomplete.vue';
 import PdfPageCanvas from '@/Components/Portal/Annotator/PdfPageCanvas.vue';
 import AnnotationOverlay from '@/Components/Portal/Annotator/AnnotationOverlay.vue';
 import FieldPalette from '@/Components/Portal/Annotator/FieldPalette.vue';
 import TemplateTester from '@/Components/Portal/Annotator/TemplateTester.vue';
 import { usePdfDocument } from '@/Composables/usePdfDocument';
 import { useConfirm } from '@/Composables/useConfirm';
-import { ArrowLeftIcon, ArrowUturnLeftIcon, Bars3Icon, BeakerIcon, BookOpenIcon, CheckBadgeIcon, DocumentArrowUpIcon, PlusIcon, TrashIcon, XMarkIcon } from '@heroicons/vue/24/outline';
+import { ArrowLeftIcon, ArrowUturnLeftIcon, Bars3Icon, BeakerIcon, BookOpenIcon, CheckBadgeIcon, DocumentArrowUpIcon, MagnifyingGlassMinusIcon, MagnifyingGlassPlusIcon, PencilSquareIcon, PlusIcon, TrashIcon, XMarkIcon } from '@heroicons/vue/24/outline';
 
 const props = defineProps({
     template: { type: Object, required: true },
     canEdit: { type: Boolean, default: false },
     canDelete: { type: Boolean, default: false },
+    vendors: { type: Array, default: () => [] },
+    existingScopes: { type: Array, default: () => [] },
 });
+
+// ---- edit template details (scope / type / name / description) ----
+const showEditDetails = ref(false);
+const detailsForm = useForm({
+    vendor_id: props.template.vendor_id,
+    document_type: props.template.document_type,
+    name: props.template.name,
+    description: props.template.description || '',
+});
+
+// Vendor keys (id, or null for Global) already used by *other* templates for
+// the selected type — this template's own current scope is never hidden.
+const takenForType = computed(() => {
+    const set = new Set();
+    for (const s of props.existingScopes) {
+        if (s.id !== props.template.id && s.document_type === detailsForm.document_type) set.add(s.vendor_id ?? null);
+    }
+    return set;
+});
+const globalTaken = computed(() => takenForType.value.has(null));
+const availableVendors = computed(() => props.vendors.filter((v) => !takenForType.value.has(v.id)));
+
+// Autocomplete treats null/'' as "nothing selected", but Global (vendor_id:
+// null) is a real, meaningful choice here, not an empty one — so it needs a
+// stand-in value to be selectable/highlightable, translated back on the way out.
+const GLOBAL_VENDOR_VALUE = '__global__';
+const vendorOptions = computed(() => [
+    ...(globalTaken.value ? [] : [{ value: GLOBAL_VENDOR_VALUE, label: 'Global (fallback for all vendors)' }]),
+    ...availableVendors.value.map((v) => ({ value: v.id, label: `${v.name} (${v.code})` })),
+]);
+const detailsVendorModel = computed({
+    get: () => (detailsForm.vendor_id === null ? GLOBAL_VENDOR_VALUE : detailsForm.vendor_id),
+    set: (value) => { detailsForm.vendor_id = (!value || value === GLOBAL_VENDOR_VALUE) ? null : value; },
+});
+
+const documentTypeOptions = [
+    { value: 'invoice', label: 'Invoice' },
+    { value: 'purchase_order', label: 'Purchase Order' },
+    { value: 'quotation', label: 'Quotation' },
+];
+
+// If switching Document Type leaves the selected vendor already taken by
+// another template for that type, fall back to the same way the Create
+// modal keeps its selection valid rather than silently submitting a stale one.
+const pickValidDetailsVendor = () => {
+    if (takenForType.value.has(detailsForm.vendor_id ?? null)) {
+        detailsForm.vendor_id = globalTaken.value ? (availableVendors.value[0]?.id ?? null) : null;
+    }
+};
+watch(() => detailsForm.document_type, pickValidDetailsVendor);
+
+const openEditDetails = () => {
+    // Sync from current props rather than useForm's captured-at-mount
+    // defaults, so re-opening after a save reflects the latest values.
+    detailsForm.vendor_id = props.template.vendor_id;
+    detailsForm.document_type = props.template.document_type;
+    detailsForm.name = props.template.name;
+    detailsForm.description = props.template.description || '';
+    detailsForm.clearErrors();
+    showEditDetails.value = true;
+};
+const submitDetails = () => {
+    detailsForm.put(route('document-templates.update', props.template.id), {
+        preserveScroll: true,
+        onSuccess: () => { showEditDetails.value = false; },
+    });
+};
 
 const { confirm } = useConfirm();
 
@@ -115,6 +186,49 @@ const { doc, numPages, loading: pdfLoading, error: pdfError, load } = usePdfDocu
 const page = ref(1);
 const mode = ref('field');
 const selectedFieldKey = ref(null);
+
+// ---- zoom (1 = fit-width) ----
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 4;
+const ZOOM_STEP = 0.25;
+const zoom = ref(1);
+const zoomPercent = computed(() => Math.round(zoom.value * 100));
+const setZoom = (value) => { zoom.value = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value)); };
+const zoomIn = () => setZoom(zoom.value + ZOOM_STEP);
+const zoomOut = () => setZoom(zoom.value - ZOOM_STEP);
+const zoomReset = () => setZoom(1);
+// Ctrl/Cmd + scroll wheel zooms instead of scrolling, matching common PDF viewers.
+const onCanvasWheel = (event) => {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    setZoom(zoom.value + (event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP));
+};
+
+// ---- pan (hold right mouse button + drag to move the document) ----
+const canvasScroll = ref(null);
+const isPanning = ref(false);
+let panStart = null; // { x, y, scrollLeft, scrollTop }
+
+const onCanvasPointerDown = (event) => {
+    if (event.button !== 2) return; // right button only — left stays for annotation drawing
+    event.preventDefault();
+    isPanning.value = true;
+    panStart = { x: event.clientX, y: event.clientY, scrollLeft: canvasScroll.value.scrollLeft, scrollTop: canvasScroll.value.scrollTop };
+    event.currentTarget.setPointerCapture(event.pointerId);
+};
+const onCanvasPointerMove = (event) => {
+    if (!isPanning.value || !panStart) return;
+    canvasScroll.value.scrollLeft = panStart.scrollLeft - (event.clientX - panStart.x);
+    canvasScroll.value.scrollTop = panStart.scrollTop - (event.clientY - panStart.y);
+};
+const endPan = (event) => {
+    if (!isPanning.value) return;
+    isPanning.value = false;
+    panStart = null;
+    if (event?.currentTarget?.releasePointerCapture && event.pointerId != null) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+};
 
 const loadPdf = () => {
     if (version.value?.sample_file_path) {
@@ -287,7 +401,7 @@ const runTest = async () => {
     }
 };
 
-const typeLabel = { invoice: 'Invoice', purchase_order: 'Purchase Order', quotation: 'Quotation' }[props.template.document_type];
+const typeLabel = computed(() => ({ invoice: 'Invoice', purchase_order: 'Purchase Order', quotation: 'Quotation' }[props.template.document_type]));
 
 // ---- keyboard shortcuts (annotator) ----
 const onKeydown = (event) => {
@@ -331,6 +445,12 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
                         </p>
                     </div>
                     <StatusBadge :status="template.status" />
+                    <button v-if="canEdit" type="button"
+                        class="rounded-lg p-2 text-slate-400 transition-all hover:bg-slate-100 hover:text-slate-600"
+                        title="Edit template details (scope, type, name)"
+                        @click="openEditDetails">
+                        <PencilSquareIcon class="h-4 w-4" />
+                    </button>
                 </div>
 
                 <div class="flex flex-wrap items-center gap-2">
@@ -388,7 +508,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
 
                 <div v-else class="grid gap-6 xl:grid-cols-[1fr_22rem]">
                     <!-- Document canvas -->
-                    <div class="rounded-2xl border border-slate-100 bg-slate-50 p-4 shadow-sm">
+                    <div class="min-w-0 rounded-2xl border border-slate-100 bg-slate-50 p-4 shadow-sm">
                         <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
                             <div class="flex items-center gap-2">
                                 <button type="button"
@@ -413,35 +533,61 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
                                     <ArrowUturnLeftIcon class="h-3.5 w-3.5" /> Undo
                                 </button>
                             </div>
-                            <div class="flex items-center gap-2 text-sm text-slate-600">
-                                <button type="button" class="rounded-lg bg-white px-2.5 py-1 font-bold disabled:opacity-40" :disabled="page <= 1" @click="page--">‹</button>
-                                Page {{ page }} / {{ numPages || '?' }}
-                                <button type="button" class="rounded-lg bg-white px-2.5 py-1 font-bold disabled:opacity-40" :disabled="page >= numPages" @click="page++">›</button>
+                            <div class="flex items-center gap-3">
+                                <div class="flex items-center gap-2 text-sm text-slate-600">
+                                    <button type="button" class="rounded-lg bg-white px-2.5 py-1 font-bold disabled:opacity-40" :disabled="page <= 1" @click="page--">‹</button>
+                                    Page {{ page }} / {{ numPages || '?' }}
+                                    <button type="button" class="rounded-lg bg-white px-2.5 py-1 font-bold disabled:opacity-40" :disabled="page >= numPages" @click="page++">›</button>
+                                </div>
+                                <div class="flex items-center gap-1 rounded-lg bg-white p-1 text-slate-600">
+                                    <button type="button" class="rounded-md p-1.5 hover:bg-slate-100 disabled:opacity-40" title="Zoom out"
+                                        :disabled="zoom <= ZOOM_MIN" @click="zoomOut">
+                                        <MagnifyingGlassMinusIcon class="h-4 w-4" />
+                                    </button>
+                                    <button type="button"
+                                        class="min-w-[3.5rem] rounded-md px-1.5 py-1 text-center text-xs font-bold hover:bg-slate-100"
+                                        title="Reset to fit width" @click="zoomReset">
+                                        {{ zoomPercent }}%
+                                    </button>
+                                    <button type="button" class="rounded-md p-1.5 hover:bg-slate-100 disabled:opacity-40" title="Zoom in"
+                                        :disabled="zoom >= ZOOM_MAX" @click="zoomIn">
+                                        <MagnifyingGlassPlusIcon class="h-4 w-4" />
+                                    </button>
+                                </div>
                             </div>
                         </div>
 
                         <p v-if="pdfError" class="rounded-lg bg-red-50 p-3 text-sm text-red-700">{{ pdfError }}</p>
                         <p v-else-if="pdfLoading" class="p-8 text-center text-sm text-slate-500">Loading document...</p>
 
-                        <PdfPageCanvas v-if="doc" :doc="doc" :page-number="page">
-                            <template #default="{ width, height }">
-                                <AnnotationOverlay
-                                    :fields="fields"
-                                    :table="table"
-                                    :page="page"
-                                    :width="width"
-                                    :height="height"
-                                    :selected-field-key="selectedFieldKey"
-                                    :mode="mode"
-                                    :readonly="!editable"
-                                    @update:fields="onFieldsUpdate"
-                                    @update:table="onTableUpdate"
-                                    @select="selectedFieldKey = $event"
-                                    @mutate-start="beginInteraction"
-                                    @mutate-end="endInteraction"
-                                />
-                            </template>
-                        </PdfPageCanvas>
+                        <div ref="canvasScroll"
+                            :class="['max-h-[75vh] overflow-auto rounded-lg', isPanning ? 'cursor-grabbing select-none' : '']"
+                            @wheel="onCanvasWheel"
+                            @pointerdown="onCanvasPointerDown"
+                            @pointermove="onCanvasPointerMove"
+                            @pointerup="endPan"
+                            @pointercancel="endPan"
+                            @contextmenu.prevent>
+                            <PdfPageCanvas v-if="doc" :doc="doc" :page-number="page" :zoom="zoom">
+                                <template #default="{ width, height }">
+                                    <AnnotationOverlay
+                                        :fields="fields"
+                                        :table="table"
+                                        :page="page"
+                                        :width="width"
+                                        :height="height"
+                                        :selected-field-key="selectedFieldKey"
+                                        :mode="mode"
+                                        :readonly="!editable"
+                                        @update:fields="onFieldsUpdate"
+                                        @update:table="onTableUpdate"
+                                        @select="selectedFieldKey = $event"
+                                        @mutate-start="beginInteraction"
+                                        @mutate-end="endInteraction"
+                                    />
+                                </template>
+                            </PdfPageCanvas>
+                        </div>
 
                     </div>
 
@@ -555,5 +701,54 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
                 </div>
             </div>
         </div>
+
+        <Modal :show="showEditDetails" @close="showEditDetails = false">
+            <form class="p-6" @submit.prevent="submitDetails">
+                <h3 class="text-lg font-bold text-slate-900">Edit Template Details</h3>
+                <div class="mt-5 space-y-4">
+                    <div>
+                        <label class="mb-1 block text-sm font-semibold text-slate-700">Vendor (Scope)</label>
+                        <Autocomplete
+                            v-model="detailsVendorModel"
+                            :options="vendorOptions"
+                            placeholder="Select a vendor…"
+                            required
+                        />
+                        <p class="mt-1 text-xs text-slate-400">Vendors that already have a template for the selected type are hidden.</p>
+                        <p v-if="detailsForm.errors.vendor_id" class="mt-1 text-sm text-red-600">{{ detailsForm.errors.vendor_id }}</p>
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-sm font-semibold text-slate-700">Document Type</label>
+                        <Autocomplete
+                            v-model="detailsForm.document_type"
+                            :options="documentTypeOptions"
+                            placeholder="Select a document type…"
+                            required
+                        />
+                        <p v-if="detailsForm.errors.document_type" class="mt-1 text-sm text-red-600">{{ detailsForm.errors.document_type }}</p>
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-sm font-semibold text-slate-700">Name</label>
+                        <input v-model="detailsForm.name" type="text"
+                            class="w-full rounded-lg border-slate-300 text-sm focus:border-emerald-500 focus:ring-emerald-500/30" />
+                        <p v-if="detailsForm.errors.name" class="mt-1 text-sm text-red-600">{{ detailsForm.errors.name }}</p>
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-sm font-semibold text-slate-700">Description</label>
+                        <input v-model="detailsForm.description" type="text"
+                            class="w-full rounded-lg border-slate-300 text-sm focus:border-emerald-500 focus:ring-emerald-500/30" />
+                    </div>
+                </div>
+                <div class="mt-6 flex justify-end gap-3">
+                    <button type="button" class="rounded-xl px-5 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-100" @click="showEditDetails = false">
+                        Cancel
+                    </button>
+                    <button type="submit" :disabled="detailsForm.processing"
+                        class="rounded-xl bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-600/20 hover:bg-emerald-700 disabled:opacity-50">
+                        Save Changes
+                    </button>
+                </div>
+            </form>
+        </Modal>
     </AppLayout>
 </template>

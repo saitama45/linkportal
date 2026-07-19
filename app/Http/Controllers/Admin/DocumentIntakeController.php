@@ -9,6 +9,8 @@ use App\Http\Services\DocumentIntakeService;
 use App\Models\IntakeDocument;
 use App\Models\Vendor;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
 
@@ -52,6 +54,11 @@ class DocumentIntakeController extends Controller
         if ($request->filled('date_to')) {
             $query->whereDate('created_at', '<=', $request->date_to);
         }
+        // Follow-up queue: approved POs nobody has billed against yet, oldest
+        // approval first so the most overdue surfaces at the top.
+        if ($request->boolean('awaiting_invoice')) {
+            $query->approvedPoAwaitingInvoice()->reorder('external_decided_at');
+        }
 
         // Conditional aggregation instead of GROUP BY CASE: SQL Server refuses to
         // match the SELECT and GROUP BY CASE expressions once parameter-bound.
@@ -71,9 +78,11 @@ class DocumentIntakeController extends Controller
                 'pending_review' => IntakeDocument::whereIn('status', [IntakeDocument::STATUS_SENDING, IntakeDocument::STATUS_PENDING_EXTERNAL_REVIEW])->count(),
                 'open_exceptions' => (int) ($aging->d0_3 ?? 0) + (int) ($aging->d4_7 ?? 0) + (int) ($aging->d8_plus ?? 0),
                 'exception_aging' => ['0-3' => (int) ($aging->d0_3 ?? 0), '4-7' => (int) ($aging->d4_7 ?? 0), '8+' => (int) ($aging->d8_plus ?? 0)],
+                'po_awaiting_invoice' => IntakeDocument::approvedPoAwaitingInvoice()->count(),
             ],
+            'cycleTimes' => $this->cycleTimeMetrics(),
             'documents' => Inertia::scroll($query->paginate(20)->withQueryString()),
-            'filters' => $request->only(['search', 'status', 'document_type', 'source', 'date_from', 'date_to']),
+            'filters' => $request->only(['search', 'status', 'document_type', 'source', 'date_from', 'date_to', 'awaiting_invoice']),
             'canUpload' => $request->user()->can('document-intake.validate'),
             'canDelete' => $request->user()->can('document-intake.delete'),
             'vendors' => Vendor::where('status', 'active')
@@ -129,6 +138,7 @@ class DocumentIntakeController extends Controller
                 'exceptions' => fn ($q) => $q->orderByRaw("CASE WHEN status = 'open' THEN 0 ELSE 1 END")->orderByDesc('severity'),
                 'events',
             ]),
+            'poMatch' => $this->poMatchSummary($intakeDocument),
             'vendors' => $intakeDocument->vendor_id
                 ? []
                 : Vendor::orderBy('name')->get(['id', 'code', 'name']),
@@ -138,6 +148,142 @@ class DocumentIntakeController extends Controller
             'canResolveExceptions' => $request->user()->can('document-exceptions.resolve'),
             'canDelete' => $request->user()->can('document-intake.delete'),
         ]);
+    }
+
+    /**
+     * PO↔Invoice reconciliation shown on the detail panel: for an invoice, the
+     * PO it bills and that PO's remaining balance; for a PO, its own fulfillment.
+     * Null for anything that has no PO relationship to show.
+     */
+    private function poMatchSummary(IntakeDocument $doc): ?array
+    {
+        $validityDays = IntakeDocument::poValidityDays();
+
+        if ($doc->document_type === 'invoice') {
+            $po = $doc->matchedPo();
+            if (! $po) {
+                return null;
+            }
+
+            return [
+                'role' => 'invoice',
+                'po_reference_no' => $po->reference_no,
+                'po_number' => $po->po_number,
+                'po_id' => $po->id,
+                // 'locked' once persisted at validation — stable even if the PO's
+                // number is later edited; 'derived' while still provisional.
+                'link' => $doc->matched_po_intake_document_id ? 'locked' : 'derived',
+                'po_total' => $po->total_amount !== null ? (float) $po->total_amount : null,
+                'invoiced_to_date' => $po->invoicedToDate(),
+                'remaining_balance' => $po->remainingBalance(),
+                'fulfillment' => $po->fulfillmentStatus(),
+                'expired' => $po->isExpired($validityDays),
+            ];
+        }
+
+        return $this->poMatchSummaryPurchaseOrder($doc, $validityDays);
+    }
+
+    private function poMatchSummaryPurchaseOrder(IntakeDocument $doc, ?int $validityDays): ?array
+    {
+        if ($doc->document_type === 'purchase_order' && $doc->status === IntakeDocument::STATUS_APPROVED) {
+            // The invoices billed against this PO — makes partial invoicing traceable.
+            $invoices = $doc->invoicesForPo()
+                ->latest('created_at')
+                ->get(['id', 'reference_no', 'invoice_no', 'total_amount', 'status', 'created_at'])
+                ->map(fn ($inv) => [
+                    'id' => $inv->id,
+                    'reference_no' => $inv->reference_no,
+                    'invoice_no' => $inv->invoice_no,
+                    'total_amount' => $inv->total_amount !== null ? (float) $inv->total_amount : null,
+                    'status' => $inv->status,
+                ]);
+
+            return [
+                'role' => 'purchase_order',
+                'po_total' => $doc->total_amount !== null ? (float) $doc->total_amount : null,
+                'invoiced_to_date' => $doc->invoicedToDate(),
+                'remaining_balance' => $doc->remainingBalance(),
+                'fulfillment' => $doc->fulfillmentStatus(),
+                'expired' => $doc->isExpired($validityDays),
+                'invoice_count' => $invoices->count(),
+                'invoices' => $invoices,
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * Pipeline cycle-time averages (in minutes; the UI humanizes). Each metric
+     * reports a sample count so a tiny/zero sample reads honestly rather than as
+     * a misleading average. deleted_at is filtered explicitly since these are raw
+     * builder queries outside the SoftDeletes global scope.
+     */
+    private function cycleTimeMetrics(): array
+    {
+        $table = (new IntakeDocument)->getTable();
+
+        // Single AVG(minutes) + COUNT over one filtered span, SQL-Server-safe
+        // (DATEDIFF, cast to float so the average keeps its decimals).
+        $span = function (string $fromCol, string $toCol, callable $filter) use ($table): array {
+            $q = DB::table($table)
+                ->selectRaw("AVG(CAST(DATEDIFF(MINUTE, {$fromCol}, {$toCol}) AS FLOAT)) AS avg_min, COUNT(*) AS n")
+                ->whereNull('deleted_at')
+                ->whereNotNull($fromCol)
+                ->whereNotNull($toCol);
+            $filter($q);
+            $row = $q->first();
+
+            return [
+                'avg_minutes' => $row->avg_min !== null ? round((float) $row->avg_min, 1) : null,
+                'count' => (int) $row->n,
+            ];
+        };
+
+        // PO approved -> first invoice against it. Two set-based queries + a PHP
+        // join keeps it off CROSS APPLY while staying a bounded number of queries.
+        $firstInvoice = DB::table($table)
+            ->selectRaw('vendor_id, po_number, MIN(created_at) AS first_created')
+            ->where('document_type', 'invoice')
+            ->whereNull('deleted_at')
+            ->whereNotNull('po_number')
+            ->whereNotIn('status', [IntakeDocument::STATUS_CANCELLED, IntakeDocument::STATUS_REJECTED])
+            ->groupBy('vendor_id', 'po_number')
+            ->get()
+            ->keyBy(fn ($r) => $r->vendor_id.'|'.$r->po_number);
+
+        $pos = DB::table($table)
+            ->select('vendor_id', 'po_number', 'external_decided_at')
+            ->where('document_type', 'purchase_order')
+            ->where('status', IntakeDocument::STATUS_APPROVED)
+            ->whereNull('deleted_at')
+            ->whereNotNull('po_number')
+            ->whereNotNull('external_decided_at')
+            ->get();
+
+        $poDeltas = [];
+        foreach ($pos as $po) {
+            $fi = $firstInvoice->get($po->vendor_id.'|'.$po->po_number);
+            if (! $fi || ! $fi->first_created) {
+                continue;
+            }
+            // Signed: only count invoices submitted after the PO was approved.
+            $mins = Carbon::parse($po->external_decided_at)->diffInMinutes(Carbon::parse($fi->first_created), false);
+            if ($mins > 0) {
+                $poDeltas[] = $mins;
+            }
+        }
+
+        return [
+            'intake_to_validated' => $span('created_at', 'validated_at', fn ($q) => $q),
+            'review_turnaround' => $span('submitted_at', 'external_decided_at', fn ($q) => $q),
+            'end_to_end' => $span('created_at', 'external_decided_at', fn ($q) => $q->where('status', IntakeDocument::STATUS_APPROVED)),
+            'po_to_first_invoice' => [
+                'avg_minutes' => $poDeltas ? round(array_sum($poDeltas) / count($poDeltas), 1) : null,
+                'count' => count($poDeltas),
+            ],
+        ];
     }
 
     /** Soft-delete an intake document (files are retained for restore/audit). */
@@ -218,6 +364,9 @@ class DocumentIntakeController extends Controller
         ])->save();
 
         $intakeDocument->syncLineItems();
+        // po_number may have just changed — refresh the persisted PO link before
+        // the PO-based checks (over-billing, expiry) evaluate against it.
+        $intakeDocument->resolveMatchedPo();
         $intakeDocument->recordEvent('corrections_saved', null, [], 'user', $request->user()->id);
         $this->exceptions->evaluate($intakeDocument->fresh(['vendor', 'latestExtraction']), 'extraction');
 
@@ -242,6 +391,7 @@ class DocumentIntakeController extends Controller
             'validated_at' => now(),
         ])->save();
         $intakeDocument->syncLineItems();
+        $intakeDocument->resolveMatchedPo(); // lock in the matched PO at validation
         $intakeDocument->recordEvent('validated', null, [], 'user', $request->user()->id);
         AuditLogger::log('intake_document_validated', $intakeDocument);
 
@@ -324,6 +474,9 @@ class DocumentIntakeController extends Controller
             $validated['document_type'] ?? null,
             $request->user()->id,
         );
+
+        // Vendor/type may have changed the matching basis — keep the link honest.
+        $intakeDocument->refresh()->resolveMatchedPo();
 
         if (($validated['remember_sender'] ?? false) && $intakeDocument->vendor_id && $intakeDocument->inboundEmail) {
             \App\Models\VendorIntakeEmail::firstOrCreate(

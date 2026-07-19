@@ -2,12 +2,14 @@
 import { ref, watch, onMounted, onUnmounted } from 'vue';
 
 /**
- * Renders one PDF page to a canvas at fit-width scale. The default slot is an
- * absolutely-positioned layer over the page for annotation overlays.
+ * Renders one PDF page to a canvas at fit-width scale, multiplied by `zoom`.
+ * The default slot is an absolutely-positioned layer over the page for
+ * annotation overlays.
  */
 const props = defineProps({
     doc: { type: Object, default: null }, // pdfjs PDFDocumentProxy
     pageNumber: { type: Number, default: 1 },
+    zoom: { type: Number, default: 1 },
 });
 
 const emit = defineEmits(['rendered']);
@@ -30,8 +32,18 @@ const render = async () => {
 
     const containerWidth = container.value.clientWidth || 600;
     const base = page.getViewport({ scale: 1 });
-    const scale = containerWidth / base.width;
-    const viewport = page.getViewport({ scale });
+    const scale = (containerWidth / base.width) * props.zoom;
+    let viewport = page.getViewport({ scale });
+
+    // Guards against a layout feedback loop (e.g. an ancestor without
+    // min-width:0 growing to fit this canvas, which then grows "fit width"
+    // again next render): never allocate an unreasonably large canvas.
+    const MAX_DIM = 8000;
+    if (viewport.width > MAX_DIM || viewport.height > MAX_DIM) {
+        const clampedScale = scale * Math.min(MAX_DIM / viewport.width, MAX_DIM / viewport.height);
+        viewport = page.getViewport({ scale: clampedScale });
+    }
+
     const dpr = window.devicePixelRatio || 1;
 
     const el = canvas.value;
@@ -56,7 +68,7 @@ const render = async () => {
     }
 };
 
-watch(() => [props.doc, props.pageNumber], render);
+watch(() => [props.doc, props.pageNumber, props.zoom], render);
 
 onMounted(() => {
     resizeObserver = new ResizeObserver(() => render());

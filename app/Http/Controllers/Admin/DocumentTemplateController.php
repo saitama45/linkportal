@@ -92,6 +92,13 @@ class DocumentTemplateController extends Controller
             ]),
             'canEdit' => $request->user()->can('document-templates.edit'),
             'canDelete' => $request->user()->can('document-templates.delete'),
+            'vendors' => Vendor::where('status', 'active')->orderBy('name')->get(['id', 'code', 'name']),
+            // (id, vendor_id, document_type) for every template — lets the edit
+            // modal hide combinations already taken by *other* templates while
+            // still allowing this one to keep (or reselect) its own scope.
+            'existingScopes' => DocumentTemplate::get(['id', 'vendor_id', 'document_type'])
+                ->map(fn ($t) => ['id' => $t->id, 'vendor_id' => $t->vendor_id, 'document_type' => $t->document_type])
+                ->values(),
         ]);
     }
 
@@ -100,6 +107,8 @@ class DocumentTemplateController extends Controller
         abort_unless($request->user()->can('document-templates.edit'), 403);
 
         $validated = $request->validate([
+            'vendor_id' => 'nullable|exists:portal_vendors,id',
+            'document_type' => 'sometimes|required|in:invoice,purchase_order,quotation',
             'name' => 'required|string|max:100',
             'description' => 'nullable|string|max:255',
             'status' => 'nullable|in:draft,active,archived',
@@ -107,6 +116,24 @@ class DocumentTemplateController extends Controller
 
         if (($validated['status'] ?? null) === 'active' && ! $documentTemplate->active_version_id) {
             return redirect()->back()->with('error', 'Activate a version before activating the template.');
+        }
+
+        // Same one-template-per-vendor+type rule as creation, applied only when
+        // scope actually changed (a no-op edit must never trip over itself).
+        if (array_key_exists('vendor_id', $validated) || array_key_exists('document_type', $validated)) {
+            $vendorId = array_key_exists('vendor_id', $validated) ? $validated['vendor_id'] : $documentTemplate->vendor_id;
+            $documentType = $validated['document_type'] ?? $documentTemplate->document_type;
+
+            $scopeTaken = DocumentTemplate::where('document_type', $documentType)
+                ->where('id', '!=', $documentTemplate->id)
+                ->when($vendorId === null, fn ($q) => $q->whereNull('vendor_id'))
+                ->when($vendorId !== null, fn ($q) => $q->where('vendor_id', $vendorId))
+                ->exists();
+            if ($scopeTaken) {
+                throw ValidationException::withMessages([
+                    'vendor_id' => 'A template already exists for this vendor and document type.',
+                ]);
+            }
         }
 
         $documentTemplate->update($validated + ['updated_by' => $request->user()->id]);

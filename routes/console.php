@@ -14,3 +14,4 @@ Schedule::command('portal:fetch-intake-emails')
     ->runInBackground();
 
 Schedule::command('portal:flag-overdue-reviews')->dailyAt('08:00');
+Schedule::command('portal:flag-po-awaiting-invoice')->dailyAt('08:05');

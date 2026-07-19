@@ -35,6 +35,7 @@ storage/framework/views
 
 # Tests & misc
 tests
+e2e
 *.log
 .phpunit.result.cache
 npm-debug.log

@@ -43,7 +43,8 @@ class IntakeDocument extends Model
         'inbound_email_id', 'original_filename', 'mime_type', 'file_size',
         'file_hash', 'file_path', 'converted_pdf_path', 'page_count', 'page_meta',
         'status', 'template_version_id',
-        'invoice_no', 'po_number', 'document_date', 'due_date', 'currency',
+        'invoice_no', 'po_number', 'matched_po_intake_document_id',
+        'document_date', 'due_date', 'currency',
         'subtotal', 'tax_amount', 'total_amount',
         'validated_fields', 'validated_line_items', 'overall_confidence',
         'validated_by', 'validated_at', 'submitted_by', 'submitted_at', 'submission_count',
@@ -60,6 +61,7 @@ class IntakeDocument extends Model
             'company_id' => 'integer',
             'inbound_email_id' => 'integer',
             'template_version_id' => 'integer',
+            'matched_po_intake_document_id' => 'integer',
             'page_meta' => 'array',
             'document_date' => 'date:Y-m-d',
             'due_date' => 'date:Y-m-d',
@@ -134,6 +136,195 @@ class IntakeDocument extends Model
     public function scopeForVendor($query, int $vendorId)
     {
         return $query->where('vendor_id', $vendorId);
+    }
+
+    /**
+     * Approved purchase orders that nothing has been billed against yet.
+     *
+     * A PO and the invoice that bills it are related only by a (vendor,
+     * po_number) string match — there is no persisted link between the two
+     * documents — so "has an invoice" is derived rather than stored. Cancelled
+     * and rejected invoices don't count as billed.
+     */
+    public function scopeApprovedPoAwaitingInvoice($query)
+    {
+        $table = $this->getTable();
+
+        return $query->where('document_type', 'purchase_order')
+            ->where('status', self::STATUS_APPROVED)
+            ->whereNotNull('po_number')
+            ->whereNotExists(function ($sub) use ($table) {
+                // Raw builder: the SoftDeletes global scope doesn't reach in here,
+                // so deleted_at is filtered explicitly.
+                $sub->selectRaw('1')
+                    ->from("{$table} as inv")
+                    ->whereColumn('inv.po_number', "{$table}.po_number")
+                    ->whereColumn('inv.vendor_id', "{$table}.vendor_id")
+                    ->where('inv.document_type', 'invoice')
+                    ->whereNull('inv.deleted_at')
+                    ->whereNotIn('inv.status', [self::STATUS_CANCELLED, self::STATUS_REJECTED]);
+            });
+    }
+
+    // ---- PO ↔ Invoice matching (derived by vendor + po_number, not persisted) ----
+
+    /** Invoices that count as billed: not cancelled, not rejected. */
+    private const BILLING_INVOICE_STATUSES_EXCLUDED = [self::STATUS_CANCELLED, self::STATUS_REJECTED];
+
+    /** The PO this invoice was matched to at validation time (persisted cache). */
+    public function matchedPoDocument()
+    {
+        return $this->belongsTo(self::class, 'matched_po_intake_document_id');
+    }
+
+    /**
+     * The approved purchase order this invoice bills against. Prefers the link
+     * persisted at validation time (stable if the PO's number is later edited);
+     * falls back to deriving by (vendor, po_number) for invoices not yet
+     * validated. Returns a model, not a relation.
+     */
+    public function matchedPo(): ?self
+    {
+        if ($this->document_type !== 'invoice') {
+            return null;
+        }
+
+        if ($this->matched_po_intake_document_id) {
+            $po = $this->matchedPoDocument()->first();
+            if ($po) {
+                return $po;
+            }
+            // Linked PO was deleted — fall through to re-derive.
+        }
+
+        return $this->deriveMatchedPo();
+    }
+
+    /** Resolve the matching approved PO purely from (vendor, po_number). */
+    public function deriveMatchedPo(): ?self
+    {
+        if ($this->document_type !== 'invoice' || ! $this->vendor_id || ! $this->po_number) {
+            return null;
+        }
+
+        return static::query()
+            ->where('document_type', 'purchase_order')
+            ->where('vendor_id', $this->vendor_id)
+            ->where('po_number', $this->po_number)
+            ->where('status', self::STATUS_APPROVED)
+            ->latest('external_decided_at')
+            ->first();
+    }
+
+    /**
+     * Persist (or clear) this invoice's matched-PO link from the current
+     * (vendor, po_number). Idempotent — call whenever the PO number or
+     * validation state changes. No-op for non-invoices. Returns the resolved PO.
+     */
+    public function resolveMatchedPo(): ?self
+    {
+        if ($this->document_type !== 'invoice') {
+            return null;
+        }
+
+        $po = $this->deriveMatchedPo();
+        $newId = $po?->id;
+
+        if ($this->matched_po_intake_document_id !== $newId) {
+            $this->forceFill(['matched_po_intake_document_id' => $newId])->save();
+        }
+
+        return $po;
+    }
+
+    /**
+     * Every invoice billed against this purchase order (this doc must be a PO),
+     * excluding cancelled/rejected. Optionally excludes one invoice id — used
+     * when evaluating an invoice that isn't persisted with its final values yet.
+     */
+    public function invoicesForPo(?int $excludeInvoiceId = null)
+    {
+        $query = static::query()
+            ->where('document_type', 'invoice')
+            ->where('vendor_id', $this->vendor_id)
+            ->where('po_number', $this->po_number)
+            ->whereNotIn('status', self::BILLING_INVOICE_STATUSES_EXCLUDED);
+
+        if ($excludeInvoiceId !== null) {
+            $query->where('id', '!=', $excludeInvoiceId);
+        }
+
+        return $query;
+    }
+
+    /** Sum of totals already billed against this PO (excludes cancelled/rejected). */
+    public function invoicedToDate(?int $excludeInvoiceId = null): float
+    {
+        return (float) $this->invoicesForPo($excludeInvoiceId)->sum('total_amount');
+    }
+
+    /** PO total minus what has been billed. Null when the PO has no total. */
+    public function remainingBalance(): ?float
+    {
+        if ($this->total_amount === null) {
+            return null;
+        }
+
+        return round((float) $this->total_amount - $this->invoicedToDate(), 2);
+    }
+
+    /**
+     * Fulfillment of this PO derived from matched invoice totals:
+     * 'open' (nothing billed), 'partially_invoiced', or 'fully_invoiced'.
+     * $tolerance absorbs rounding when deciding "fully" (fraction of PO total).
+     */
+    public function fulfillmentStatus(float $tolerance = 0.01): string
+    {
+        $poTotal = (float) ($this->total_amount ?? 0);
+        $billed = $this->invoicedToDate();
+
+        if ($billed <= 0) {
+            return 'open';
+        }
+        if ($poTotal <= 0) {
+            return 'partially_invoiced'; // something billed against a zero/absent PO total
+        }
+
+        return $billed >= $poTotal * (1 - $tolerance) ? 'fully_invoiced' : 'partially_invoiced';
+    }
+
+    /**
+     * Whether this approved PO has passed its validity window with billing still
+     * open. $validityDays comes from the po_expired rule config; null/0 means
+     * POs never expire (the default), so nothing is ever expired.
+     */
+    public function isExpired(?int $validityDays): bool
+    {
+        if (! $validityDays || $validityDays <= 0
+            || $this->document_type !== 'purchase_order'
+            || $this->status !== self::STATUS_APPROVED
+            || ! $this->external_decided_at) {
+            return false;
+        }
+
+        // A fully-invoiced PO has nothing left to bill, so expiry is moot.
+        if ($this->fulfillmentStatus() === 'fully_invoiced') {
+            return false;
+        }
+
+        return $this->external_decided_at->lt(now()->subDays($validityDays));
+    }
+
+    /** Days configured before an approved PO expires; null = never. */
+    public static function poValidityDays(): ?int
+    {
+        $rule = DocumentExceptionRule::where('rule_key', 'po_expired')->first();
+        if (! $rule || ! $rule->enabled) {
+            return null;
+        }
+        $days = (int) $rule->configValue('validity_days', 0);
+
+        return $days > 0 ? $days : null;
     }
 
     public function hasOpenBlockers(): bool

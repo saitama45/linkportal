@@ -5,11 +5,10 @@ import VendorLayout from '@/Layouts/VendorLayout.vue';
 import StatusBadge from '@/Components/Portal/StatusBadge.vue';
 import {
     ArrowRightIcon,
+    ArrowUpTrayIcon,
     BellIcon,
-    ClipboardDocumentListIcon,
     DocumentTextIcon,
     ExclamationTriangleIcon,
-    ReceiptPercentIcon,
 } from '@heroicons/vue/24/outline';
 
 const props = defineProps({
@@ -24,9 +23,7 @@ const page = usePage();
 const vendor = computed(() => page.props.auth?.vendor || {});
 
 const cards = computed(() => [
-    { label: 'Invoices', value: props.stats?.invoices ?? 0, sub: `${props.stats?.invoices_pending ?? 0} pending approval`, route: 'vendor.invoices.index', icon: ReceiptPercentIcon, tone: 'emerald' },
-    { label: 'Purchase Orders', value: props.stats?.purchase_orders ?? 0, sub: 'submitted', route: 'vendor.purchase-orders.index', icon: ClipboardDocumentListIcon, tone: 'teal' },
-    { label: 'Quotations', value: props.stats?.quotations ?? 0, sub: 'submitted', route: 'vendor.quotations.index', icon: DocumentTextIcon, tone: 'sky' },
+    { label: 'Document Uploads', value: props.stats?.uploads ?? 0, sub: `${props.stats?.uploads_returned ?? 0} need your attention`, route: 'vendor.document-uploads.index', icon: ArrowUpTrayIcon, tone: 'emerald' },
     { label: 'Documents', value: props.stats?.documents ?? 0, sub: `${props.stats?.documents_pending ?? 0} under review`, route: 'vendor.documents.index', icon: DocumentTextIcon, tone: 'indigo' },
 ]);
 

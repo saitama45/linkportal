@@ -5,6 +5,7 @@ import AppLayout from '@/Layouts/AppLayout.vue';
 import DataTable from '@/Components/DataTable.vue';
 import StatusBadge from '@/Components/Portal/StatusBadge.vue';
 import Modal from '@/Components/Modal.vue';
+import Autocomplete from '@/Components/Autocomplete.vue';
 import { usePermission } from '@/Composables/usePermission';
 import { PencilSquareIcon, PlusIcon } from '@heroicons/vue/24/outline';
 
@@ -46,6 +47,25 @@ const pickValidVendor = () => {
 };
 watch(() => form.document_type, pickValidVendor);
 watch(showCreate, (open) => { if (open) pickValidVendor(); });
+
+// Autocomplete treats null/'' as "nothing selected", but Global (vendor_id:
+// null) is a real, meaningful choice here — give it a stand-in value that's
+// selectable/highlightable, translated back to null at the model boundary.
+const GLOBAL_VENDOR_VALUE = '__global__';
+const vendorOptions = computed(() => [
+    ...(globalTaken.value ? [] : [{ value: GLOBAL_VENDOR_VALUE, label: 'Global (fallback for all vendors)' }]),
+    ...availableVendors.value.map((v) => ({ value: v.id, label: `${v.name} (${v.code})` })),
+]);
+const formVendorModel = computed({
+    get: () => (form.vendor_id === null ? GLOBAL_VENDOR_VALUE : form.vendor_id),
+    set: (value) => { form.vendor_id = (!value || value === GLOBAL_VENDOR_VALUE) ? null : value; },
+});
+
+const documentTypeOptions = [
+    { value: 'invoice', label: 'Invoice' },
+    { value: 'purchase_order', label: 'Purchase Order' },
+    { value: 'quotation', label: 'Quotation' },
+];
 
 const submit = () => {
     form.post(route('document-templates.store'), {
@@ -135,11 +155,13 @@ const formatDate = (value) => (value ? new Date(value).toLocaleDateString() : '�
                 <div class="mt-5 space-y-4">
                     <div>
                         <label class="mb-1 block text-sm font-semibold text-slate-700">Vendor</label>
-                        <select v-model="form.vendor_id" :disabled="noneAvailable"
-                            class="w-full rounded-lg border-slate-300 text-sm focus:border-emerald-500 focus:ring-emerald-500/30 disabled:bg-slate-50">
-                            <option v-if="!globalTaken" :value="null">Global (fallback for all vendors)</option>
-                            <option v-for="vendor in availableVendors" :key="vendor.id" :value="vendor.id">{{ vendor.name }} ({{ vendor.code }})</option>
-                        </select>
+                        <Autocomplete
+                            v-model="formVendorModel"
+                            :options="vendorOptions"
+                            :disabled="noneAvailable"
+                            placeholder="Select a vendor…"
+                            required
+                        />
                         <p v-if="noneAvailable" class="mt-1 text-sm text-amber-600">
                             Every vendor already has a template for this type — add a <span class="font-semibold">New Version</span> to the existing template instead.
                         </p>
@@ -148,11 +170,12 @@ const formatDate = (value) => (value ? new Date(value).toLocaleDateString() : '�
                     </div>
                     <div>
                         <label class="mb-1 block text-sm font-semibold text-slate-700">Document Type</label>
-                        <select v-model="form.document_type" class="w-full rounded-lg border-slate-300 text-sm focus:border-emerald-500 focus:ring-emerald-500/30">
-                            <option value="invoice">Invoice</option>
-                            <option value="purchase_order">Purchase Order</option>
-                            <option value="quotation">Quotation</option>
-                        </select>
+                        <Autocomplete
+                            v-model="form.document_type"
+                            :options="documentTypeOptions"
+                            placeholder="Select a document type…"
+                            required
+                        />
                         <p v-if="form.errors.document_type" class="mt-1 text-sm text-red-600">{{ form.errors.document_type }}</p>
                     </div>
                     <div>

@@ -36,22 +36,6 @@ class RoleService
             'label' => 'Products',
             'permissions' => ['view', 'create', 'edit', 'delete'],
         ],
-        'invoices' => [
-            'label' => 'Invoices',
-            'permissions' => ['view', 'create', 'approve', 'export'],
-        ],
-        'purchase-orders' => [
-            'label' => 'Purchase Orders',
-            'permissions' => ['view', 'create', 'approve', 'export'],
-        ],
-        'quotations' => [
-            'label' => 'Quotations',
-            'permissions' => ['view', 'create', 'approve', 'export'],
-        ],
-        'approvals' => [
-            'label' => 'Approvals Inbox',
-            'permissions' => ['view'],
-        ],
         'document-templates' => [
             'label' => 'Document Templates',
             'permissions' => ['view', 'create', 'edit', 'delete'],
@@ -81,10 +65,6 @@ class RoleService
             ['label' => 'Roles & Permissions', 'route' => 'roles.index'],
             ['label' => 'Vendors', 'route' => 'vendors.index'],
             ['label' => 'Products', 'route' => 'products.index'],
-            ['label' => 'Invoices', 'route' => 'invoices.index'],
-            ['label' => 'Purchase Orders', 'route' => 'purchase-orders.index'],
-            ['label' => 'Quotations', 'route' => 'quotations.index'],
-            ['label' => 'Approvals Inbox', 'route' => 'approvals.index'],
             ['label' => 'Document Intake', 'route' => 'document-intake.index'],
             ['label' => 'Document Templates', 'route' => 'document-templates.index'],
             ['label' => 'Document Exceptions', 'route' => 'document-exceptions.index'],

@@ -124,11 +124,23 @@ class IntegrationController extends Controller
                 'return' => 'was returned — please review the remarks.',
                 'reject' => 'was rejected by accounting.',
             ];
+
+            // An approved PO isn't the end of the line for the vendor — it's their
+            // cue to bill against it. Spell that out so they don't have to know
+            // the process from memory.
+            $vendorMessage = $validated['remarks'] ?? null;
+            if ($validated['decision'] === 'approve'
+                && $document->document_type === 'purchase_order'
+                && $document->po_number) {
+                $vendorMessage = "You can now submit your invoice referencing PO {$document->po_number}."
+                    .($vendorMessage ? "\n\n".$vendorMessage : '');
+            }
+
             PortalNotifier::notifyVendor(
                 $document->vendor,
                 'document_decision',
                 "Document {$document->reference_no} {$vendorMessages[$validated['decision']]}",
-                $validated['remarks'] ?? null,
+                $vendorMessage,
             );
         }
 

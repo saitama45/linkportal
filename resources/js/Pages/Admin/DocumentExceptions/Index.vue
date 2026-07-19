@@ -48,8 +48,24 @@ const updateRule = (rule, patch) => {
     router.put(route('document-exception-rules.update', rule.id), {
         enabled: patch.enabled ?? rule.enabled,
         severity: patch.severity ?? rule.severity,
-        config: rule.config,
+        config: patch.config ?? rule.config,
     }, { preserveScroll: true });
+};
+
+// Time-based rules expose an editable day threshold. Keyed by rule so the
+// number input can be labelled meaningfully instead of surfacing raw JSON.
+const dayConfig = {
+    po_expired: { key: 'validity_days', label: 'Expire approved POs after', placeholder: 'never', hint: 'Leave blank to keep POs open indefinitely.' },
+    po_awaiting_invoice_overdue: { key: 'overdue_days', label: 'Nudge on unbilled POs after', placeholder: '7', hint: 'Days after approval before an aging alert is raised.' },
+    overdue_review: { key: 'overdue_days', label: 'Flag stalled reviews after', placeholder: '3', hint: 'Days in external review before it is flagged overdue.' },
+};
+
+const updateRuleDays = (rule, rawValue) => {
+    const meta = dayConfig[rule.rule_key];
+    const trimmed = String(rawValue).trim();
+    // Empty means "no threshold" (never / disabled), stored as null.
+    const value = trimmed === '' ? null : Math.max(0, Math.floor(Number(trimmed))) || null;
+    updateRule(rule, { config: { ...rule.config, [meta.key]: value } });
 };
 
 const formatDate = (value) => (value ? new Date(value).toLocaleString() : '—');
@@ -163,23 +179,39 @@ const formatDate = (value) => (value ? new Date(value).toLocaleString() : '—')
                 <h3 class="text-lg font-bold text-slate-900">Exception Rules</h3>
                 <p class="mt-1 text-sm text-slate-500">Toggle rules and set the severity of the exceptions they raise.</p>
                 <div class="mt-5 max-h-96 space-y-2 overflow-y-auto pr-1">
-                    <div v-for="rule in rules" :key="rule.id" class="flex items-center justify-between gap-3 rounded-xl border border-slate-100 p-3">
-                        <div>
-                            <p class="text-sm font-semibold text-slate-800">{{ rule.label }}</p>
-                            <p class="text-xs text-slate-400">{{ rule.rule_key }}</p>
+                    <div v-for="rule in rules" :key="rule.id" class="rounded-xl border border-slate-100 p-3">
+                        <div class="flex items-center justify-between gap-3">
+                            <div>
+                                <p class="text-sm font-semibold text-slate-800">{{ rule.label }}</p>
+                                <p class="text-xs text-slate-400">{{ rule.rule_key }}</p>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <select :value="rule.severity" class="rounded-lg border-slate-200 py-1 text-xs focus:border-emerald-500 focus:ring-emerald-500/30"
+                                    @change="updateRule(rule, { severity: $event.target.value })">
+                                    <option value="blocker">blocker</option>
+                                    <option value="warning">warning</option>
+                                </select>
+                                <label class="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+                                    <input type="checkbox" :checked="rule.enabled"
+                                        class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500/30"
+                                        @change="updateRule(rule, { enabled: $event.target.checked })" />
+                                    enabled
+                                </label>
+                            </div>
                         </div>
-                        <div class="flex items-center gap-3">
-                            <select :value="rule.severity" class="rounded-lg border-slate-200 py-1 text-xs focus:border-emerald-500 focus:ring-emerald-500/30"
-                                @change="updateRule(rule, { severity: $event.target.value })">
-                                <option value="blocker">blocker</option>
-                                <option value="warning">warning</option>
-                            </select>
-                            <label class="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-                                <input type="checkbox" :checked="rule.enabled"
-                                    class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500/30"
-                                    @change="updateRule(rule, { enabled: $event.target.checked })" />
-                                enabled
-                            </label>
+
+                        <!-- Editable day threshold for time-based rules (e.g. PO expiration) -->
+                        <div v-if="dayConfig[rule.rule_key]" class="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+                            <label class="text-xs font-semibold text-slate-600">{{ dayConfig[rule.rule_key].label }}</label>
+                            <div class="flex items-center gap-1.5">
+                                <input type="number" min="0" step="1"
+                                    :value="rule.config?.[dayConfig[rule.rule_key].key] ?? ''"
+                                    :placeholder="dayConfig[rule.rule_key].placeholder"
+                                    class="w-24 rounded-lg border-slate-200 py-1 text-xs focus:border-emerald-500 focus:ring-emerald-500/30"
+                                    @change="updateRuleDays(rule, $event.target.value)" />
+                                <span class="text-xs text-slate-400">days</span>
+                            </div>
+                            <p class="w-full text-[11px] text-slate-400">{{ dayConfig[rule.rule_key].hint }}</p>
                         </div>
                     </div>
                 </div>

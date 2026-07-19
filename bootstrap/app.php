@@ -36,14 +36,18 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
 
         $middleware->redirectGuestsTo(function (\Illuminate\Http\Request $request) {
+            // Vendor pages -> the public vendor login (/login); everything else
+            // is the staff area -> the staff login (/admin/login).
             return $request->is('vendor') || $request->is('vendor/*')
-                ? route('vendor.login')
-                : '/login';
+                ? route('vendor.login')   // /login
+                : route('login');         // /admin/login
         });
 
         $middleware->redirectUsersTo(
             function (\Illuminate\Http\Request $request) {
-                if (auth('vendor')->check() && ($request->is('vendor') || $request->is('vendor/*'))) {
+                // A signed-in vendor hitting a vendor guest page (/login now, or
+                // /vendor/register) goes to their own dashboard.
+                if (auth('vendor')->check() && ($request->is('login') || $request->is('vendor') || $request->is('vendor/*'))) {
                     return route('vendor.dashboard');
                 }
 

@@ -1,13 +1,9 @@
 <?php
 
-use App\Http\Controllers\Admin\ApprovalInboxController;
 use App\Http\Controllers\Admin\DocumentIntakeController;
 use App\Http\Controllers\Admin\DocumentExceptionController;
 use App\Http\Controllers\Admin\DocumentTemplateController;
-use App\Http\Controllers\Admin\InvoiceReviewController;
 use App\Http\Controllers\Admin\ProductController;
-use App\Http\Controllers\Admin\PurchaseOrderReviewController;
-use App\Http\Controllers\Admin\QuotationReviewController;
 use App\Http\Controllers\Admin\VendorController;
 use App\Http\Controllers\CompanyController;
 use App\Http\Controllers\DashboardController;
@@ -17,7 +13,8 @@ use App\Http\Controllers\UserController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
-    return redirect()->route('login');
+    // The portal's front door is the vendor login (/login).
+    return redirect()->route('vendor.login');
 });
 
 // Signed file access for ghelpdesk reviewers (no session; URL::temporarySignedRoute)
@@ -50,28 +47,6 @@ Route::middleware('auth')->group(function () {
     // --- Product master data ---
     Route::resource('products', ProductController::class)->only(['index', 'store', 'update', 'destroy']);
     Route::post('product-categories', [ProductController::class, 'storeCategory'])->name('product-categories.store');
-
-    // --- Transaction review (invoices / POs / quotations) ---
-    Route::get('invoices', [InvoiceReviewController::class, 'index'])->name('invoices.index');
-    Route::get('invoices/create', [InvoiceReviewController::class, 'create'])->name('invoices.create');
-    Route::post('invoices', [InvoiceReviewController::class, 'store'])->name('invoices.store');
-    Route::get('invoices/{invoice}', [InvoiceReviewController::class, 'show'])->name('invoices.show');
-    Route::put('invoices/{invoice}/act', [InvoiceReviewController::class, 'act'])->name('invoices.act');
-
-    Route::get('purchase-orders', [PurchaseOrderReviewController::class, 'index'])->name('purchase-orders.index');
-    Route::get('purchase-orders/create', [PurchaseOrderReviewController::class, 'create'])->name('purchase-orders.create');
-    Route::post('purchase-orders', [PurchaseOrderReviewController::class, 'store'])->name('purchase-orders.store');
-    Route::get('purchase-orders/{purchaseOrder}', [PurchaseOrderReviewController::class, 'show'])->name('purchase-orders.show');
-    Route::put('purchase-orders/{purchaseOrder}/act', [PurchaseOrderReviewController::class, 'act'])->name('purchase-orders.act');
-
-    Route::get('quotations', [QuotationReviewController::class, 'index'])->name('quotations.index');
-    Route::get('quotations/create', [QuotationReviewController::class, 'create'])->name('quotations.create');
-    Route::post('quotations', [QuotationReviewController::class, 'store'])->name('quotations.store');
-    Route::get('quotations/{quotation}', [QuotationReviewController::class, 'show'])->name('quotations.show');
-    Route::put('quotations/{quotation}/act', [QuotationReviewController::class, 'act'])->name('quotations.act');
-
-    // --- Cross-type approvals inbox ---
-    Route::get('approvals', [ApprovalInboxController::class, 'index'])->name('approvals.index');
 
     // --- OCR document intake (vendor-uploaded/emailed documents) ---
     Route::get('document-intake', [DocumentIntakeController::class, 'index'])->name('document-intake.index');

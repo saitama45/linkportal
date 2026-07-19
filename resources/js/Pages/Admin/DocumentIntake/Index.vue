@@ -4,6 +4,7 @@ import { Head, Link, router, useForm } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import DataTable from '@/Components/DataTable.vue';
 import StatusBadge from '@/Components/Portal/StatusBadge.vue';
+import Autocomplete from '@/Components/Autocomplete.vue';
 import { EyeIcon, PencilSquareIcon, ExclamationTriangleIcon, ArrowUpTrayIcon, XMarkIcon, TrashIcon } from '@heroicons/vue/24/outline';
 import { useConfirm } from '@/Composables/useConfirm';
 
@@ -12,12 +13,37 @@ const props = defineProps({
     filters: { type: Object, default: () => ({}) },
     statuses: { type: Array, default: () => [] },
     stats: { type: Object, default: () => ({}) },
+    cycleTimes: { type: Object, default: () => ({}) },
     canUpload: { type: Boolean, default: false },
     canDelete: { type: Boolean, default: false },
     vendors: { type: Array, default: () => [] },
 });
 
 const { confirm } = useConfirm();
+
+// Humanize an average duration given in minutes into the largest sensible unit.
+const humanizeMinutes = (min) => {
+    if (min == null) return '—';
+    if (min < 60) return `${Math.round(min)}m`;
+    if (min < 60 * 24) return `${(min / 60).toFixed(1)}h`;
+    return `${(min / 1440).toFixed(1)}d`;
+};
+
+const cycleTimeTiles = computed(() => [
+    { key: 'intake_to_validated', label: 'Intake → Validated', hint: 'Upload to admin validation' },
+    { key: 'review_turnaround', label: 'Review Turnaround', hint: 'Submitted to accounting decision' },
+    { key: 'end_to_end', label: 'Upload → Approved', hint: 'Full cycle for approved docs' },
+    { key: 'po_to_first_invoice', label: 'PO → First Invoice', hint: 'Approval to first bill against it' },
+].map((t) => ({
+    ...t,
+    value: humanizeMinutes(props.cycleTimes?.[t.key]?.avg_minutes ?? null),
+    count: props.cycleTimes?.[t.key]?.count ?? 0,
+})));
+
+const vendorOptions = computed(() => props.vendors.map((v) => ({
+    value: v.id,
+    label: v.code ? `${v.name} (${v.code})` : v.name,
+})));
 
 const withAccounting = ['sending', 'pending_external_review'];
 // Documents that haven't been validated yet — still editable / re-runnable.
@@ -87,6 +113,7 @@ const activeFilters = reactive({
     source: props.filters.source || '',
     date_from: props.filters.date_from || '',
     date_to: props.filters.date_to || '',
+    awaiting_invoice: props.filters.awaiting_invoice ? '1' : '',
 });
 
 const extraParams = computed(() => {
@@ -101,6 +128,17 @@ const applyFilters = () => {
     router.get(route('document-intake.index'),
         { ...extraParams.value, search: props.filters.search || undefined },
         { preserveState: true, preserveScroll: true });
+};
+
+// This queue is already pinned to approved POs, so a lingering status/type
+// filter could only ever contradict it and return nothing.
+const toggleAwaitingInvoice = () => {
+    activeFilters.awaiting_invoice = activeFilters.awaiting_invoice ? '' : '1';
+    if (activeFilters.awaiting_invoice) {
+        activeFilters.status = '';
+        activeFilters.document_type = '';
+    }
+    applyFilters();
 };
 
 const typeLabel = (type) => ({ invoice: 'Invoice', purchase_order: 'PO', quotation: 'Quotation' }[type] || 'Unclassified');
@@ -122,7 +160,7 @@ const confidencePct = (value) => (value == null ? '—' : `${Math.round(value * 
         <div class="py-6">
             <div class="mx-auto max-w-7xl space-y-4 sm:px-6 lg:px-8">
                 <!-- Summary cards -->
-                <div class="grid gap-4 sm:grid-cols-3">
+                <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                     <div class="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
                         <p class="text-xs font-bold uppercase tracking-widest text-slate-400">Pending Validation</p>
                         <p class="mt-1 text-3xl font-black text-slate-900">{{ stats.pending_validation ?? 0 }}</p>
@@ -140,6 +178,42 @@ const confidencePct = (value) => (value == null ? '—' : `${Math.round(value * 
                                 4-7d: <span :class="stats.exception_aging['4-7'] ? 'text-amber-600' : ''">{{ stats.exception_aging['4-7'] }}</span> ·
                                 8+d: <span :class="stats.exception_aging['8+'] ? 'text-red-600' : ''">{{ stats.exception_aging['8+'] }}</span>
                             </p>
+                        </div>
+                    </div>
+                    <button type="button"
+                        :class="[
+                            'rounded-2xl border p-5 text-left shadow-sm transition-all',
+                            activeFilters.awaiting_invoice
+                                ? 'border-indigo-300 bg-indigo-50 ring-2 ring-indigo-500/20'
+                                : 'border-slate-100 bg-white hover:border-indigo-200 hover:bg-indigo-50/40',
+                        ]"
+                        :title="activeFilters.awaiting_invoice ? 'Show all documents' : 'Show only approved POs with no invoice yet'"
+                        @click="toggleAwaitingInvoice">
+                        <p class="text-xs font-bold uppercase tracking-widest"
+                            :class="activeFilters.awaiting_invoice ? 'text-indigo-600' : 'text-slate-400'">
+                            POs Awaiting Invoice
+                        </p>
+                        <div class="mt-1 flex items-baseline gap-3">
+                            <p class="text-3xl font-black text-slate-900">{{ stats.po_awaiting_invoice ?? 0 }}</p>
+                            <span class="text-xs font-semibold" :class="activeFilters.awaiting_invoice ? 'text-indigo-600' : 'text-slate-400'">
+                                {{ activeFilters.awaiting_invoice ? 'Filtering — click to clear' : 'Click to filter' }}
+                            </span>
+                        </div>
+                    </button>
+                </div>
+
+                <!-- Cycle times -->
+                <div class="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+                    <div class="mb-3 flex items-center gap-2">
+                        <p class="text-xs font-bold uppercase tracking-widest text-slate-400">Cycle Times</p>
+                        <span class="text-[11px] font-semibold text-slate-300">average duration</span>
+                    </div>
+                    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                        <div v-for="tile in cycleTimeTiles" :key="tile.key" class="rounded-xl bg-slate-50 p-3.5">
+                            <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400">{{ tile.label }}</p>
+                            <p class="mt-1 text-2xl font-black tabular-nums text-slate-900">{{ tile.value }}</p>
+                            <p class="mt-0.5 text-[11px] text-slate-400">{{ tile.hint }}</p>
+                            <p class="mt-1 text-[10px] font-semibold text-slate-300">n = {{ tile.count }}</p>
                         </div>
                     </div>
                 </div>
@@ -275,13 +349,7 @@ const confidencePct = (value) => (value == null ? '—' : `${Math.round(value * 
                     <form class="space-y-4 px-6 py-5" @submit.prevent="submitUpload">
                         <div>
                             <label class="mb-1 block text-xs font-bold uppercase text-slate-400">Vendor</label>
-                            <select v-model="uploadForm.vendor_id"
-                                class="block w-full rounded-lg border-slate-300 text-sm focus:border-emerald-500 focus:ring-emerald-500/30">
-                                <option value="" disabled>Select a vendor…</option>
-                                <option v-for="vendor in vendors" :key="vendor.id" :value="vendor.id">
-                                    {{ vendor.name }}<span v-if="vendor.code"> ({{ vendor.code }})</span>
-                                </option>
-                            </select>
+                            <Autocomplete v-model="uploadForm.vendor_id" :options="vendorOptions" placeholder="Select a vendor…" />
                             <p v-if="uploadForm.errors.vendor_id" class="mt-1 text-xs text-red-600">{{ uploadForm.errors.vendor_id }}</p>
                         </div>
 
@@ -339,13 +407,7 @@ const confidencePct = (value) => (value == null ? '—' : `${Math.round(value * 
                     <form class="space-y-4 px-6 py-5" @submit.prevent="submitEdit">
                         <div>
                             <label class="mb-1 block text-xs font-bold uppercase text-slate-400">Vendor</label>
-                            <select v-model="editForm.vendor_id"
-                                class="block w-full rounded-lg border-slate-300 text-sm focus:border-emerald-500 focus:ring-emerald-500/30">
-                                <option value="" disabled>Select a vendor…</option>
-                                <option v-for="vendor in vendors" :key="vendor.id" :value="vendor.id">
-                                    {{ vendor.name }}<span v-if="vendor.code"> ({{ vendor.code }})</span>
-                                </option>
-                            </select>
+                            <Autocomplete v-model="editForm.vendor_id" :options="vendorOptions" placeholder="Select a vendor…" />
                             <p v-if="editForm.errors.vendor_id" class="mt-1 text-xs text-red-600">{{ editForm.errors.vendor_id }}</p>
                         </div>
 

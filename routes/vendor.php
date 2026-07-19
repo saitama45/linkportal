@@ -5,18 +5,21 @@ use App\Http\Controllers\Vendor\BankAccountController;
 use App\Http\Controllers\Vendor\DashboardController;
 use App\Http\Controllers\Vendor\DocumentController;
 use App\Http\Controllers\Vendor\DocumentUploadController;
-use App\Http\Controllers\Vendor\InvoiceController;
 use App\Http\Controllers\Vendor\NotificationController;
 use App\Http\Controllers\Vendor\ProfileController;
-use App\Http\Controllers\Vendor\PurchaseOrderController;
-use App\Http\Controllers\Vendor\QuotationController;
 use Illuminate\Support\Facades\Route;
 
+// The vendor login is the portal's public entry point, so it lives at the site
+// root (/login) rather than under /vendor. Name stays `vendor.login` so all
+// route('vendor.login') references keep working.
+Route::middleware('guest:vendor')->group(function () {
+    Route::get('login', [AuthController::class, 'showLogin'])->name('vendor.login');
+    Route::post('login', [AuthController::class, 'login']);
+});
+
 Route::prefix('vendor')->name('vendor.')->group(function () {
-    // Guest (vendor) routes
+    // Guest (vendor) registration stays under /vendor.
     Route::middleware('guest:vendor')->group(function () {
-        Route::get('login', [AuthController::class, 'showLogin'])->name('login');
-        Route::post('login', [AuthController::class, 'login']);
         Route::get('register', [AuthController::class, 'showRegister'])->name('register');
         Route::post('register', [AuthController::class, 'register']);
     });
@@ -54,13 +57,6 @@ Route::prefix('vendor')->name('vendor.')->group(function () {
             Route::post('document-uploads', [DocumentUploadController::class, 'store'])->name('document-uploads.store');
             Route::get('document-uploads/{documentUpload}', [DocumentUploadController::class, 'show'])->name('document-uploads.show');
             Route::put('document-uploads/{documentUpload}/cancel', [DocumentUploadController::class, 'cancel'])->name('document-uploads.cancel');
-
-            Route::post('purchase-orders/{purchaseOrder}/acknowledge', [PurchaseOrderController::class, 'acknowledge'])
-                ->name('purchase-orders.acknowledge');
-
-            Route::resource('invoices', InvoiceController::class);
-            Route::resource('purchase-orders', PurchaseOrderController::class);
-            Route::resource('quotations', QuotationController::class);
         });
     });
 });

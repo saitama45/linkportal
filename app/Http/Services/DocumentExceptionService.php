@@ -20,7 +20,8 @@ class DocumentExceptionService
     private const CHECKPOINTS = [
         'intake' => ['vendor_inactive', 'unsupported_file', 'duplicate_file', 'unmatched_email', 'missing_document_type'],
         'extraction' => ['vendor_inactive', 'missing_document_type', 'missing_template', 'missing_required_field',
-            'low_confidence', 'duplicate_invoice_no', 'po_mismatch', 'total_mismatch', 'duplicate_file'],
+            'low_confidence', 'duplicate_invoice_no', 'po_mismatch', 'po_line_mismatch', 'po_amount_exceeded',
+            'po_expired', 'total_mismatch', 'duplicate_file'],
     ];
 
     public function evaluate(IntakeDocument $document, string $checkpoint): void
@@ -281,20 +282,59 @@ class DocumentExceptionService
 
     protected function checkPoMismatch(IntakeDocument $doc, DocumentExceptionRule $rule): array
     {
-        if (! $doc->vendor_id || ! $doc->po_number) {
+        // Only an invoice *references* a PO. A purchase-order document's own
+        // po_number identifies itself, so reconciling it against the PO list
+        // would just match itself once approved — and false-positive before then.
+        if ($doc->document_type !== 'invoice' || ! $doc->vendor_id || ! $doc->po_number) {
             return [];
         }
 
-        $vendorPos = \App\Models\PurchaseOrder::where('vendor_id', $doc->vendor_id);
-        if (! $vendorPos->clone()->exists()) {
+        // POs now arrive as intake documents; portal_purchase_orders is frozen but
+        // still holds pre-pipeline history, so both are consulted.
+        $intakePos = IntakeDocument::query()
+            ->where('vendor_id', $doc->vendor_id)
+            ->where('document_type', 'purchase_order')
+            ->whereNotIn('status', [IntakeDocument::STATUS_CANCELLED, IntakeDocument::STATUS_REJECTED]);
+        $legacyPos = \App\Models\PurchaseOrder::where('vendor_id', $doc->vendor_id);
+
+        if (! $intakePos->clone()->exists() && ! $legacyPos->clone()->exists()) {
             return []; // vendor has no POs on record; nothing to reconcile against
         }
 
-        $match = $vendorPos->where('po_number', $doc->po_number)->exists();
+        $samePo = $intakePos->clone()->where('po_number', $doc->po_number)->first(['reference_no', 'status']);
 
-        return $match ? [] : [[
+        // Approval is what authorises billing against a PO.
+        if ($samePo?->status === IntakeDocument::STATUS_APPROVED
+            || $legacyPos->clone()->where('po_number', $doc->po_number)->exists()) {
+            return [];
+        }
+
+        // The number is right but the PO hasn't cleared accounting — a different
+        // problem from a wrong number, and worth saying so plainly.
+        if ($samePo) {
+            return [[
+                'field_key' => 'po_number',
+                'message' => "PO \"{$doc->po_number}\" ({$samePo->reference_no}) is not approved yet — it is currently "
+                    .str_replace('_', ' ', $samePo->status).'.',
+                'context' => ['po_reference_no' => $samePo->reference_no, 'po_status' => $samePo->status],
+            ]];
+        }
+
+        // Listing what this vendor *does* have approved makes a typo obvious.
+        $approved = $intakePos->clone()
+            ->where('status', IntakeDocument::STATUS_APPROVED)
+            ->whereNotNull('po_number')
+            ->orderByDesc('external_decided_at')
+            ->limit(5)
+            ->pluck('po_number')
+            ->values();
+
+        return [[
             'field_key' => 'po_number',
-            'message' => "PO number \"{$doc->po_number}\" not found among this vendor's purchase orders.",
+            'message' => $approved->isEmpty()
+                ? "PO number \"{$doc->po_number}\" not found among this vendor's purchase orders."
+                : "PO number \"{$doc->po_number}\" not found. This vendor's approved POs: ".$approved->implode(', ').'.',
+            'context' => ['approved_po_numbers' => $approved->all()],
         ]];
     }
 
@@ -324,7 +364,146 @@ class DocumentExceptionService
         ]];
     }
 
+    /**
+     * Three-way-match, line level: an invoice's items compared against the
+     * purchase order it bills. Flags a per-unit price that differs from the PO
+     * and any line item the PO never ordered. Quantity differences are expected
+     * (partial invoicing), so they're handled by amount, not here.
+     */
+    protected function checkPoLineMismatch(IntakeDocument $doc, DocumentExceptionRule $rule): array
+    {
+        if ($doc->document_type !== 'invoice') {
+            return [];
+        }
+
+        $po = $doc->matchedPo();
+        if (! $po) {
+            return []; // no approved PO to reconcile against; po_mismatch owns that signal
+        }
+
+        // Fraction the unit price may drift before it's called a variance.
+        $priceTolerance = (float) $rule->configValue('price_tolerance', 0.02);
+
+        $poByDesc = $po->lineItems
+            ->filter(fn ($i) => $this->normalizeDesc($i->description) !== '')
+            ->keyBy(fn ($i) => $this->normalizeDesc($i->description));
+
+        $raised = [];
+        foreach ($doc->lineItems as $line) {
+            $key = $this->normalizeDesc($line->description);
+            if ($key === '') {
+                continue;
+            }
+
+            $poLine = $poByDesc->get($key);
+            if (! $poLine) {
+                $raised[] = [
+                    'field_key' => 'line:'.$line->line_no,
+                    'message' => "Line \"{$line->description}\" is not on PO {$po->po_number}.",
+                    'context' => ['line_no' => $line->line_no, 'po_reference_no' => $po->reference_no],
+                ];
+                continue;
+            }
+
+            $invPrice = $line->unit_price !== null ? (float) $line->unit_price : null;
+            $poPrice = $poLine->unit_price !== null ? (float) $poLine->unit_price : null;
+            if ($invPrice !== null && $poPrice !== null && $poPrice > 0
+                && abs($invPrice - $poPrice) > $poPrice * $priceTolerance) {
+                $raised[] = [
+                    'field_key' => 'line:'.$line->line_no,
+                    'message' => sprintf('Unit price for "%s" is %.2f on the invoice but %.2f on PO %s.',
+                        $line->description, $invPrice, $poPrice, $po->po_number),
+                    'context' => ['line_no' => $line->line_no, 'invoice_price' => $invPrice, 'po_price' => $poPrice],
+                ];
+            }
+        }
+
+        return $raised;
+    }
+
+    /**
+     * Over-billing guard: this invoice plus everything already billed against
+     * the PO must not exceed the PO's approved total (beyond a small tolerance).
+     */
+    protected function checkPoAmountExceeded(IntakeDocument $doc, DocumentExceptionRule $rule): array
+    {
+        if ($doc->document_type !== 'invoice' || $doc->total_amount === null) {
+            return [];
+        }
+
+        $po = $doc->matchedPo();
+        if (! $po || $po->total_amount === null) {
+            return [];
+        }
+
+        $tolerance = (float) $rule->configValue('tolerance', 0.01);
+        $poTotal = (float) $po->total_amount;
+
+        // Everything else billed against the PO, plus this invoice's own total.
+        $priorBilled = $po->invoicedToDate($doc->id);
+        $cumulative = $priorBilled + (float) $doc->total_amount;
+
+        if ($cumulative <= $poTotal * (1 + $tolerance)) {
+            return [];
+        }
+
+        return [[
+            'field_key' => 'total_amount',
+            'message' => sprintf('Billing %.2f against PO %s would bring the total invoiced to %.2f, over the PO amount of %.2f.',
+                (float) $doc->total_amount, $po->po_number, $cumulative, $poTotal),
+            'context' => [
+                'po_reference_no' => $po->reference_no,
+                'po_total' => $poTotal,
+                'already_billed' => $priorBilled,
+                'this_invoice' => (float) $doc->total_amount,
+                'cumulative' => round($cumulative, 2),
+            ],
+        ]];
+    }
+
+    /**
+     * Enforce the PO validity window: an invoice billing a PO that was approved
+     * longer ago than the configured window is flagged. Off by default
+     * (validity_days null) so POs stay open indefinitely until a policy is set.
+     */
+    protected function checkPoExpired(IntakeDocument $doc, DocumentExceptionRule $rule): array
+    {
+        if ($doc->document_type !== 'invoice') {
+            return [];
+        }
+
+        $validityDays = (int) $rule->configValue('validity_days', 0);
+        if ($validityDays <= 0) {
+            return []; // no expiration policy configured
+        }
+
+        $po = $doc->matchedPo();
+        if (! $po || ! $po->isExpired($validityDays)) {
+            return [];
+        }
+
+        $expiredOn = $po->external_decided_at->copy()->addDays($validityDays);
+
+        return [[
+            'field_key' => 'po_number',
+            'message' => sprintf('PO %s expired on %s (%d-day validity from approval on %s).',
+                $po->po_number, $expiredOn->toDateString(), $validityDays, $po->external_decided_at->toDateString()),
+            'context' => [
+                'po_reference_no' => $po->reference_no,
+                'approved_at' => $po->external_decided_at->toIso8601String(),
+                'expired_on' => $expiredOn->toIso8601String(),
+                'validity_days' => $validityDays,
+            ],
+        ]];
+    }
+
     // ---- helpers ----
+
+    /** Lowercased, whitespace-collapsed description for loose line matching. */
+    private function normalizeDesc(?string $value): string
+    {
+        return trim(preg_replace('/\s+/', ' ', mb_strtolower((string) $value)));
+    }
 
     private function fieldValue(IntakeDocument $doc, string $key)
     {
