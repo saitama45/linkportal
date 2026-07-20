@@ -140,15 +140,21 @@ class DocumentUploadController extends Controller
     {
         abort_unless($documentUpload->vendor_id === $request->user('vendor')->id, 403);
 
+        $documentUpload->load(['events', 'templateVersion', 'latestExtraction']);
+
         return Inertia::render('Vendor/DocumentUploads/Show', [
-            'document' => $documentUpload->load(['events'])
-                ->only([
-                    'id', 'reference_no', 'document_type', 'source', 'original_filename',
-                    'status', 'invoice_no', 'po_number', 'document_date', 'due_date',
-                    'currency', 'subtotal', 'tax_amount', 'total_amount',
-                    'external_decision', 'external_decision_remarks', 'external_decided_at',
-                    'created_at', 'events',
-                ]),
+            'document' => $documentUpload->only([
+                'id', 'reference_no', 'document_type', 'source', 'original_filename',
+                'status', 'invoice_no', 'po_number', 'document_date', 'due_date',
+                'currency', 'subtotal', 'tax_amount', 'total_amount',
+                'external_decision', 'external_decision_remarks', 'external_decided_at',
+                'created_at', 'events',
+            ]),
+            // The same resolved set the accounting handoff carries — corrected
+            // lines when staff have validated them, the raw extraction until
+            // then — so a vendor sees exactly what goes forward for review.
+            'lineItems' => $documentUpload->resolvedLineItems(),
+            'lineItemColumns' => $documentUpload->lineItemColumns(),
         ]);
     }
 

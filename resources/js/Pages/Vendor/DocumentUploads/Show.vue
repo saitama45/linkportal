@@ -13,6 +13,8 @@ import {
 
 const props = defineProps({
     document: { type: Object, required: true },
+    lineItems: { type: Array, default: () => [] },
+    lineItemColumns: { type: Array, default: () => [] },
 });
 
 // ---- document viewer (same zoom + right-drag pan as the staff screens) ----
@@ -28,6 +30,16 @@ onMounted(() => load(route('vendor.document-uploads.file', props.document.id)));
 const typeLabel = (type) => ({ invoice: 'Invoice', purchase_order: 'Purchase Order', quotation: 'Quotation' }[type] || 'Document');
 const money = (value) => (value == null ? '—' : Number(value).toLocaleString(undefined, { minimumFractionDigits: 2 }));
 const formatDate = (value) => (value ? new Date(value).toLocaleDateString() : '—');
+
+// Amount-style columns are right-aligned and money-formatted; a quantity is
+// numeric but not currency, and any custom column the template defines is text.
+const AMOUNT_KEYS = new Set(['unit_price', 'line_total', 'amount', 'subtotal', 'tax']);
+const isNumericColumn = (key) => AMOUNT_KEYS.has(key) || key === 'quantity';
+const cellText = (row, key) => {
+    const value = row[key];
+    if (value === null || value === undefined || value === '') return '—';
+    return AMOUNT_KEYS.has(key) ? money(value) : value;
+};
 
 const cancellable = ['received', 'conversion_failed', 'extraction_failed', 'needs_validation', 'returned'];
 
@@ -142,6 +154,37 @@ const cancel = () => {
                     </dl>
                     <p class="mt-4 text-xs text-slate-400">
                         Details are read automatically and verified by our team before review. You'll be notified if anything needs your attention.
+                    </p>
+                </div>
+
+                <div class="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
+                    <h3 class="text-sm font-bold uppercase tracking-widest text-slate-500">Line Items</h3>
+
+                    <div v-if="lineItems.length" class="mt-4 overflow-x-auto">
+                        <table class="w-full text-left text-sm">
+                            <thead>
+                                <tr class="border-b border-slate-100">
+                                    <th v-for="col in lineItemColumns" :key="col.key"
+                                        :class="['pb-2 text-xs font-bold uppercase tracking-wide text-slate-400',
+                                                 isNumericColumn(col.key) ? 'text-right' : '']">
+                                        {{ col.label }}
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="(row, index) in lineItems" :key="index" class="border-b border-slate-50 last:border-0">
+                                    <td v-for="col in lineItemColumns" :key="col.key"
+                                        :class="['py-2.5 text-slate-700',
+                                                 isNumericColumn(col.key) ? 'text-right tabular-nums whitespace-nowrap' : '']">
+                                        {{ cellText(row, col.key) }}
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <p v-else class="mt-4 text-sm text-slate-400">
+                        No line items were read from this document.
                     </p>
                 </div>
 
