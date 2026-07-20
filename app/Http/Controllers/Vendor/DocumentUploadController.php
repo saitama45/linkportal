@@ -155,6 +155,14 @@ class DocumentUploadController extends Controller
             // then — so a vendor sees exactly what goes forward for review.
             'lineItems' => $documentUpload->resolvedLineItems(),
             'lineItemColumns' => $documentUpload->lineItemColumns(),
+            // Header fields follow the template too, so a vendor whose template
+            // defines custom fields sees those rather than a fixed default set.
+            'templateFields' => data_get($documentUpload->templateVersion, 'annotations.fields', []),
+            'validatedFields' => $documentUpload->validated_fields ?? [],
+            'extractedFields' => collect(data_get($documentUpload->latestExtraction, 'header_fields', []))
+                ->filter(fn ($f) => ! empty($f['key']))
+                ->mapWithKeys(fn ($f) => [$f['key'] => $f['value'] ?? null])
+                ->all(),
         ]);
     }
 

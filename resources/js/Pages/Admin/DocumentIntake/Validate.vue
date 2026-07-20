@@ -8,6 +8,7 @@ import IntakeLineItemsEditor from '@/Components/Portal/IntakeLineItemsEditor.vue
 import PdfPageCanvas from '@/Components/Portal/Annotator/PdfPageCanvas.vue';
 import { usePdfDocument } from '@/Composables/usePdfDocument';
 import { usePdfViewport } from '@/Composables/usePdfViewport';
+import { headerFieldsFor } from '@/Components/Portal/documentFields';
 import { useConfirm } from '@/Composables/useConfirm';
 import {
     ArrowLeftIcon, ArrowPathIcon, CheckBadgeIcon, ExclamationTriangleIcon,
@@ -48,32 +49,42 @@ const extraction = computed(() => props.document.latest_extraction);
 const extractionField = (key) => (extraction.value?.header_fields || []).find((f) => f.key === key);
 
 // ---- editable state ----
-const HEADER_FIELDS = [
-    { key: 'invoice_no', label: 'Document No.', type: 'text' },
-    { key: 'po_number', label: 'PO Number', type: 'text' },
-    { key: 'document_date', label: 'Document Date', type: 'date' },
-    { key: 'due_date', label: 'Due Date', type: 'date' },
-    { key: 'currency', label: 'Currency', type: 'text' },
-    { key: 'subtotal', label: 'Subtotal', type: 'number' },
-    { key: 'tax_amount', label: 'Tax', type: 'number' },
-    { key: 'total_amount', label: 'Total', type: 'number' },
-    { key: 'vendor_address', label: 'Vendor Address', type: 'text' },
-];
+// Rendered fields follow the document's template — its own fields, under its own
+// labels — plus any standard field the template leaves out, since those back real
+// columns and stay editable by hand. A template-less document gets the standard
+// set. Currency has no annotation but is always editable.
+const CURRENCY_FIELD = { key: 'currency', label: 'Currency', type: 'text', custom: false };
+
+const HEADER_FIELDS = computed(() => {
+    const fields = headerFieldsFor(props.document.template_version?.annotations?.fields);
+    const totalAt = fields.findIndex((f) => f.key === 'total_amount');
+    // Keep currency next to the money fields rather than orphaned at the end.
+    const at = totalAt >= 0 ? totalAt : fields.length;
+
+    return [...fields.slice(0, at), CURRENCY_FIELD, ...fields.slice(at)];
+});
 
 const dateOnly = (value) => (value ? String(value).slice(0, 10) : null);
 
-const form = ref({
-    invoice_no: props.document.invoice_no,
-    po_number: props.document.po_number,
-    document_date: dateOnly(props.document.document_date),
-    due_date: dateOnly(props.document.due_date),
-    currency: props.document.currency || 'PHP',
-    subtotal: props.document.subtotal,
-    tax_amount: props.document.tax_amount,
-    total_amount: props.document.total_amount,
-    vendor_address: props.document.validated_fields?.vendor_address
-        ?? extractionField('vendor_address')?.value ?? null,
-});
+// Keys that have their own column on portal_intake_documents.
+const PROMOTED_KEYS = new Set([
+    'invoice_no', 'po_number', 'document_date', 'due_date', 'subtotal', 'tax_amount', 'total_amount',
+]);
+
+// A promoted field reads from its column; everything else (custom fields,
+// vendor_address) from the saved corrections, falling back to what OCR read.
+const initialFieldValue = (field) => {
+    const value = PROMOTED_KEYS.has(field.key)
+        ? props.document[field.key]
+        : (props.document.validated_fields?.[field.key] ?? extractionField(field.key)?.value ?? null);
+
+    return field.type === 'date' ? dateOnly(value) : value;
+};
+
+const form = ref(Object.fromEntries([
+    ...HEADER_FIELDS.value.map((field) => [field.key, initialFieldValue(field)]),
+    ['currency', props.document.currency || 'PHP'],
+]));
 
 // Line-item columns come from the template (custom names + unlimited count);
 // fall back to the five standard columns for manual / template-less documents.

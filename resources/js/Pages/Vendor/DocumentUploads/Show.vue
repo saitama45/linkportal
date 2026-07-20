@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { Head, Link, router } from '@inertiajs/vue3';
 import VendorLayout from '@/Layouts/VendorLayout.vue';
 import StatusBadge from '@/Components/Portal/StatusBadge.vue';
@@ -7,6 +7,7 @@ import DocumentTimeline from '@/Components/Portal/DocumentTimeline.vue';
 import PdfPageCanvas from '@/Components/Portal/Annotator/PdfPageCanvas.vue';
 import { usePdfDocument } from '@/Composables/usePdfDocument';
 import { usePdfViewport } from '@/Composables/usePdfViewport';
+import { headerFieldsFor } from '@/Components/Portal/documentFields';
 import {
     ArrowLeftIcon, MagnifyingGlassMinusIcon, MagnifyingGlassPlusIcon,
 } from '@heroicons/vue/24/outline';
@@ -15,7 +16,31 @@ const props = defineProps({
     document: { type: Object, required: true },
     lineItems: { type: Array, default: () => [] },
     lineItemColumns: { type: Array, default: () => [] },
+    templateFields: { type: Array, default: () => [] },
+    validatedFields: { type: Object, default: () => ({}) },
+    extractedFields: { type: Object, default: () => ({}) },
 });
+
+// Follows the document's template — its own fields under its own labels — so a
+// custom field appears here instead of a fixed default set. Standard fields the
+// template omits still show, since they back the columns shown on the record.
+const headerFields = computed(() => headerFieldsFor(props.templateFields));
+
+const PROMOTED_KEYS = new Set([
+    'invoice_no', 'po_number', 'document_date', 'due_date', 'subtotal', 'tax_amount', 'total_amount',
+]);
+
+const fieldValue = (field) => {
+    const raw = PROMOTED_KEYS.has(field.key)
+        ? props.document[field.key]
+        : (props.validatedFields?.[field.key] ?? props.extractedFields?.[field.key] ?? null);
+
+    if (raw === null || raw === undefined || raw === '') return '—';
+    if (field.type === 'date') return formatDate(raw);
+    if (field.key === 'total_amount') return `${props.document.currency || ''} ${money(raw)}`.trim();
+
+    return ['subtotal', 'tax_amount'].includes(field.key) ? money(raw) : raw;
+};
 
 // ---- document viewer (same zoom + right-drag pan as the staff screens) ----
 const { doc, numPages, loading: pdfLoading, error: pdfError, load } = usePdfDocument();
@@ -127,29 +152,12 @@ const cancel = () => {
                 <div class="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
                     <h3 class="text-sm font-bold uppercase tracking-widest text-slate-500">Extracted Details</h3>
                     <dl class="mt-4 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3">
-                        <div>
-                            <dt class="text-xs font-semibold uppercase text-slate-400">Document No.</dt>
-                            <dd class="mt-1 text-sm font-semibold text-slate-800">{{ document.invoice_no || '—' }}</dd>
-                        </div>
-                        <div>
-                            <dt class="text-xs font-semibold uppercase text-slate-400">PO Number</dt>
-                            <dd class="mt-1 text-sm font-semibold text-slate-800">{{ document.po_number || '—' }}</dd>
-                        </div>
-                        <div>
-                            <dt class="text-xs font-semibold uppercase text-slate-400">Date</dt>
-                            <dd class="mt-1 text-sm font-semibold text-slate-800">{{ formatDate(document.document_date) }}</dd>
-                        </div>
-                        <div>
-                            <dt class="text-xs font-semibold uppercase text-slate-400">Subtotal</dt>
-                            <dd class="mt-1 text-sm font-semibold text-slate-800">{{ money(document.subtotal) }}</dd>
-                        </div>
-                        <div>
-                            <dt class="text-xs font-semibold uppercase text-slate-400">Tax</dt>
-                            <dd class="mt-1 text-sm font-semibold text-slate-800">{{ money(document.tax_amount) }}</dd>
-                        </div>
-                        <div>
-                            <dt class="text-xs font-semibold uppercase text-slate-400">Total</dt>
-                            <dd class="mt-1 text-sm font-black text-slate-900">{{ document.currency }} {{ money(document.total_amount) }}</dd>
+                        <div v-for="field in headerFields" :key="field.key">
+                            <dt class="text-xs font-semibold uppercase text-slate-400">{{ field.label }}</dt>
+                            <dd :class="['mt-1 text-sm', field.key === 'total_amount'
+                                ? 'font-black text-slate-900' : 'font-semibold text-slate-800']">
+                                {{ fieldValue(field) }}
+                            </dd>
                         </div>
                     </dl>
                     <p class="mt-4 text-xs text-slate-400">

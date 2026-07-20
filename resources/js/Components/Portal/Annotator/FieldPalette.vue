@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue';
 import { CheckCircleIcon, TrashIcon, PlusIcon } from '@heroicons/vue/24/outline';
+import { keyForFieldLabel } from '../documentFields';
 
 /**
  * Header-field list for the annotator: pick a field, then draw its box on the
@@ -29,7 +30,7 @@ const remove = (key) => {
 };
 
 const addField = () => {
-    const key = newField.value.key.trim().toLowerCase().replaceAll(/[^a-z0-9]+/g, '_');
+    const key = keyForFieldLabel(newField.value.key);
     if (!key || props.fields.some((f) => f.key === key)) return;
     emit('update:fields', [...props.fields, {
         key,

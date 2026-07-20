@@ -325,6 +325,31 @@ class DocumentIntakeController extends Controller
     }
 
     /** Persist corrected header fields + line items and re-run the rules. */
+    /**
+     * Values for the header fields this document's template defines that are not
+     * promoted columns. Only keys the template actually declares are accepted, so
+     * an arbitrary payload cannot inflate the stored JSON.
+     */
+    private function customFieldValues(Request $request, IntakeDocument $intakeDocument): array
+    {
+        $promoted = ['invoice_no', 'po_number', 'document_date', 'due_date',
+            'currency', 'subtotal', 'tax_amount', 'total_amount', 'vendor_address'];
+
+        $declared = collect(data_get($intakeDocument->templateVersion, 'annotations.fields', []))
+            ->pluck('key')
+            ->filter()
+            ->reject(fn ($key) => in_array($key, $promoted, true));
+
+        $submitted = (array) $request->input('fields', []);
+
+        return $declared
+            ->filter(fn ($key) => array_key_exists($key, $submitted))
+            ->mapWithKeys(fn ($key) => [
+                $key => is_scalar($submitted[$key]) ? mb_substr(trim((string) $submitted[$key]), 0, 500) : null,
+            ])
+            ->all();
+    }
+
     public function saveCorrections(Request $request, IntakeDocument $intakeDocument)
     {
         abort_unless($request->user()->can('document-intake.validate'), 403);
@@ -349,7 +374,11 @@ class DocumentIntakeController extends Controller
             'line_items.*.line_total' => 'nullable|numeric',
         ]);
 
-        $fields = $validated['fields'];
+        // A template may define header fields beyond the promoted ones. Those have
+        // no column and no rule above, so validate() would drop them — merge them
+        // back (as trimmed strings) to keep them in validated_fields.
+        $fields = $validated['fields'] + $this->customFieldValues($request, $intakeDocument);
+
         $intakeDocument->fill([
             'invoice_no' => $fields['invoice_no'] ?? null,
             'po_number' => $fields['po_number'] ?? null,
@@ -450,7 +479,7 @@ class DocumentIntakeController extends Controller
         try {
             \App\Jobs\SubmitDocumentReviewJob::dispatchSync($intakeDocument->id);
         } catch (\Throwable $e) {
-            \App\Jobs\SubmitDocumentReviewJob::dispatch($intakeDocument->id);
+            \App\Jobs\SubmitDocumentReviewJob::dispatch($intakeDocument->id)->onQueue(config('queue.portal'));
         }
         AuditLogger::log('intake_document_submitted', $intakeDocument);
 

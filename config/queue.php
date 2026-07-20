@@ -109,4 +109,20 @@ return [
         'table' => 'failed_jobs',
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Portal Queue
+    |--------------------------------------------------------------------------
+    |
+    | This app shares its database with ghelpdesk, so the `jobs` table is shared
+    | too. A worker claims jobs by queue name, not by application, so anything
+    | left on `default` can be picked up by the other app's worker — which then
+    | fails to resolve a class it does not have, and the document silently never
+    | progresses. Naming our own queue keeps the portal's pipeline jobs claimable
+    | only by the worker that listens for this name (see docker/supervisord.conf).
+    |
+    */
+
+    'portal' => env('PORTAL_QUEUE', 'linkportal'),
+
 ];

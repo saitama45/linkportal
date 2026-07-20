@@ -12,6 +12,7 @@ import FieldPalette from '@/Components/Portal/Annotator/FieldPalette.vue';
 import TemplateTester from '@/Components/Portal/Annotator/TemplateTester.vue';
 import { usePdfDocument } from '@/Composables/usePdfDocument';
 import { usePdfViewport } from '@/Composables/usePdfViewport';
+import { STANDARD_FIELDS } from '@/Components/Portal/documentFields';
 import { useConfirm } from '@/Composables/useConfirm';
 import { ArrowLeftIcon, ArrowUturnLeftIcon, Bars3Icon, BeakerIcon, BookOpenIcon, CheckBadgeIcon, DocumentArrowUpIcon, MagnifyingGlassMinusIcon, MagnifyingGlassPlusIcon, PencilSquareIcon, PlusIcon, TrashIcon, XMarkIcon } from '@heroicons/vue/24/outline';
 
@@ -104,16 +105,8 @@ const deleteTemplate = async () => {
     }
 };
 
-const STANDARD_FIELDS = [
-    { key: 'invoice_no', label: 'Document No.', type: 'text', required: true },
-    { key: 'document_date', label: 'Document Date', type: 'date', required: true },
-    { key: 'due_date', label: 'Due Date', type: 'date', required: false },
-    { key: 'po_number', label: 'PO Number', type: 'text', required: false },
-    { key: 'vendor_address', label: 'Vendor Address', type: 'text', required: false },
-    { key: 'subtotal', label: 'Subtotal', type: 'amount', required: false },
-    { key: 'tax_amount', label: 'Tax', type: 'amount', required: false },
-    { key: 'total_amount', label: 'Total', type: 'amount', required: true },
-];
+// Shared with the validation + vendor screens so a template's fields render the
+// same everywhere (see Components/Portal/documentFields.js).
 
 // ---- version selection ----
 const versions = computed(() => props.template.versions || []);

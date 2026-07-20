@@ -91,6 +91,16 @@ else
   echo "[entrypoint] Skipping migrations (RUN_MIGRATIONS_ON_STARTUP is not 'true')."
 fi
 
+# Diagnostic: report on the OCR intake pipeline (queue backlog, sidecar health,
+# storage writability, template matching). This container has no SSH, so set
+# RUN_PIPELINE_DIAGNOSTICS=true, restart, and read the result from the Log
+# stream. Optionally set DIAGNOSE_DOCUMENT_ID to trace one stuck document.
+# Runs before supervisord starts, so the sidecar check reports the PREVIOUS
+# boot's worker; re-run once the container is up for a live reading.
+if [ "${RUN_PIPELINE_DIAGNOSTICS:-false}" = "true" ]; then
+  php artisan portal:diagnose ${DIAGNOSE_DOCUMENT_ID:-} || echo "[entrypoint] WARNING: pipeline diagnostics failed."
+fi
+
 # Diagnostic: confirm the container actually received the integration env vars
 # (they're baked into the config cache below). If these print NO, the App Setting
 # is not reaching this container — the handoff will throw "GHELPDESK_URL is not

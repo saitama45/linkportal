@@ -140,10 +140,12 @@ class DocumentIntakeService
 
     private function dispatchPipeline(IntakeDocument $document): void
     {
+        // Pinned to the portal's own queue so the worker of the other app sharing
+        // this database cannot claim a job whose class it does not have.
         Bus::chain([
             new ConvertDocumentToPdf($document->id),
             new ExtractDocumentData($document->id),
-        ])->dispatch();
+        ])->onQueue(config('queue.portal'))->dispatch();
     }
 
     private function create(array $attributes, callable $storeFile): IntakeDocument
