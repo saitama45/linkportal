@@ -7,9 +7,11 @@ import DocumentTimeline from '@/Components/Portal/DocumentTimeline.vue';
 import IntakeLineItemsEditor from '@/Components/Portal/IntakeLineItemsEditor.vue';
 import PdfPageCanvas from '@/Components/Portal/Annotator/PdfPageCanvas.vue';
 import { usePdfDocument } from '@/Composables/usePdfDocument';
+import { usePdfViewport } from '@/Composables/usePdfViewport';
 import { useConfirm } from '@/Composables/useConfirm';
 import {
     ArrowLeftIcon, ArrowPathIcon, CheckBadgeIcon, ExclamationTriangleIcon,
+    MagnifyingGlassMinusIcon, MagnifyingGlassPlusIcon,
     PaperAirplaneIcon, ShieldCheckIcon, TrashIcon,
 } from '@heroicons/vue/24/outline';
 
@@ -104,6 +106,24 @@ const initialItems = () => {
 };
 const lineItems = ref(initialItems());
 const dirty = ref(false);
+
+// Values the extractor computed from the row's own arithmetic rather than read
+// off the page (quantity x unit_price, and its rearrangements). Surfaced so a
+// substituted value is never mistaken for something the document literally says.
+const derivedCells = computed(() => {
+    const labels = Object.fromEntries(lineItemColumns.value.map((c) => [c.key, c.label]));
+    return (extraction.value?.line_items || []).flatMap((row, index) =>
+        Object.entries(row.cells || {})
+            .filter(([, cell]) => cell?.derived_from)
+            .map(([key, cell]) => ({
+                id: `${index}-${key}`,
+                row: index + 1,
+                label: labels[key] || key,
+                source: cell.derived_from,
+                raw: cell.raw_text,
+            })),
+    );
+});
 onMounted(() => setTimeout(() => { dirty.value = false; }, 0));
 
 // ---- confidence helpers ----
@@ -121,16 +141,45 @@ const { doc, numPages, loading: pdfLoading, error: pdfError, load } = usePdfDocu
 const page = ref(1);
 const focusedFieldKey = ref(null);
 
+// ---- zoom (1 = fit-width) + right-drag pan, shared with the template editor ----
+const {
+    ZOOM_MIN, ZOOM_MAX, zoom, zoomPercent, zoomIn, zoomOut, zoomReset, onCanvasWheel,
+    canvasScroll, isPanning, onCanvasPointerDown, onCanvasPointerMove, endPan,
+} = usePdfViewport();
+
 onMounted(() => load(route('document-intake.file', props.document.id)));
 
+// Field boxes are drawn from the template's annotated regions, so this overlay
+// matches the OCR Templates editor exactly. The extraction result carries its own
+// bbox — the tight bounds of the words the engine actually found — which hugs the
+// text rather than the annotated region and, on a failed read, sits wherever the
+// stray fragment landed. What was read is already conveyed by the field's value
+// and confidence chip, so the region is the more useful thing to draw here.
+// Documents with no template (manual entry) still fall back to extraction boxes.
+const annotatedFields = computed(
+    () => (props.document.template_version?.annotations?.fields || []).filter((f) => f.bbox),
+);
+
 const boxesOnPage = computed(() => {
-    const fields = (extraction.value?.header_fields || [])
-        .filter((f) => f.bbox && f.page === page.value)
-        .map((f) => ({ id: `field-${f.key}`, key: f.key, bbox: f.bbox, confidence: f.confidence, kind: 'field' }));
+    const extracted = new Map((extraction.value?.header_fields || []).map((f) => [f.key, f]));
+    const fields = annotatedFields.value.length
+        ? annotatedFields.value.map((f) => ({
+            id: `field-${f.key}`,
+            key: f.key,
+            bbox: f.bbox,
+            page: f.page ?? 1,
+            confidence: extracted.get(f.key)?.confidence ?? 0,
+            kind: 'field',
+        }))
+        : (extraction.value?.header_fields || [])
+            .filter((f) => f.bbox)
+            .map((f) => ({ id: `field-${f.key}`, key: f.key, bbox: f.bbox, page: f.page, confidence: f.confidence, kind: 'field' }));
+
     const rows = (extraction.value?.line_items || [])
         .filter((r) => r.bbox && r.page === page.value)
         .map((r) => ({ id: `row-${r.row_index}`, key: `row ${r.row_index + 1}`, bbox: r.bbox, confidence: r.row_confidence, kind: 'row' }));
-    return [...fields, ...rows];
+
+    return [...fields.filter((f) => f.page === page.value), ...rows];
 });
 
 const boxClass = (box) => {
@@ -326,42 +375,71 @@ const typeLabel = computed(() => ({ invoice: 'Invoice', purchase_order: 'Purchas
             <div class="mx-auto max-w-[110rem] px-4 sm:px-6">
                 <div class="grid gap-6 xl:grid-cols-2">
                     <!-- Left: document viewer -->
-                    <div class="rounded-2xl border border-slate-100 bg-slate-50 p-4 shadow-sm xl:sticky xl:top-4 xl:self-start">
+                    <div class="min-w-0 rounded-2xl border border-slate-100 bg-slate-50 p-4 shadow-sm xl:sticky xl:top-4 xl:self-start">
                         <div class="mb-3 flex items-center justify-between">
                             <div class="flex items-center gap-3 text-xs font-semibold text-slate-500">
                                 <span class="flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-sm border-2 border-emerald-500 bg-emerald-400/20" /> high</span>
                                 <span class="flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-sm border-2 border-amber-500 bg-amber-400/20" /> check</span>
                                 <span class="flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-sm border-2 border-red-500 bg-red-400/20" /> low</span>
                             </div>
-                            <div class="flex items-center gap-2 text-sm text-slate-600">
-                                <button type="button" class="rounded-lg bg-white px-2.5 py-1 font-bold disabled:opacity-40" :disabled="page <= 1" @click="page--">‹</button>
-                                Page {{ page }} / {{ numPages || '?' }}
-                                <button type="button" class="rounded-lg bg-white px-2.5 py-1 font-bold disabled:opacity-40" :disabled="page >= numPages" @click="page++">›</button>
+                            <div class="flex items-center gap-3">
+                                <div class="flex items-center gap-2 text-sm text-slate-600">
+                                    <button type="button" class="rounded-lg bg-white px-2.5 py-1 font-bold disabled:opacity-40" :disabled="page <= 1" @click="page--">‹</button>
+                                    Page {{ page }} / {{ numPages || '?' }}
+                                    <button type="button" class="rounded-lg bg-white px-2.5 py-1 font-bold disabled:opacity-40" :disabled="page >= numPages" @click="page++">›</button>
+                                </div>
+                                <div class="flex items-center gap-1 rounded-lg bg-white p-1 text-slate-600">
+                                    <button type="button" class="rounded-md p-1.5 hover:bg-slate-100 disabled:opacity-40" title="Zoom out"
+                                        :disabled="zoom <= ZOOM_MIN" @click="zoomOut">
+                                        <MagnifyingGlassMinusIcon class="h-4 w-4" />
+                                    </button>
+                                    <button type="button"
+                                        class="min-w-[3.5rem] rounded-md px-1.5 py-1 text-center text-xs font-bold hover:bg-slate-100"
+                                        title="Reset to fit width" @click="zoomReset">
+                                        {{ zoomPercent }}%
+                                    </button>
+                                    <button type="button" class="rounded-md p-1.5 hover:bg-slate-100 disabled:opacity-40" title="Zoom in"
+                                        :disabled="zoom >= ZOOM_MAX" @click="zoomIn">
+                                        <MagnifyingGlassPlusIcon class="h-4 w-4" />
+                                    </button>
+                                </div>
                             </div>
                         </div>
 
                         <p v-if="pdfError" class="rounded-lg bg-red-50 p-3 text-sm text-red-700">{{ pdfError }}</p>
                         <p v-else-if="pdfLoading" class="p-8 text-center text-sm text-slate-500">Loading document...</p>
 
-                        <PdfPageCanvas v-if="doc" :doc="doc" :page-number="page">
-                            <template #default="{ width, height }">
-                                <div class="pointer-events-none absolute inset-0">
-                                    <div v-for="box in boxesOnPage" :key="box.id"
-                                        :class="['absolute rounded-sm border-2', ...boxClass(box)]"
-                                        :style="{
-                                            left: `${box.bbox[0] * width}px`,
-                                            top: `${box.bbox[1] * height}px`,
-                                            width: `${(box.bbox[2] - box.bbox[0]) * width}px`,
-                                            height: `${(box.bbox[3] - box.bbox[1]) * height}px`,
-                                        }">
-                                        <span v-if="box.kind === 'field'"
-                                            class="absolute -top-4 left-0 whitespace-nowrap rounded bg-slate-800/80 px-1 py-px text-[9px] font-bold text-white">
-                                            {{ box.key }}
-                                        </span>
+                        <div ref="canvasScroll"
+                            :class="['max-h-[75vh] overflow-auto rounded-lg', isPanning ? 'cursor-grabbing select-none' : '']"
+                            @wheel="onCanvasWheel"
+                            @pointerdown="onCanvasPointerDown"
+                            @pointermove="onCanvasPointerMove"
+                            @pointerup="endPan"
+                            @pointercancel="endPan"
+                            @contextmenu.prevent>
+                            <PdfPageCanvas v-if="doc" :doc="doc" :page-number="page" :zoom="zoom">
+                                <template #default="{ width, height }">
+                                    <div class="pointer-events-none absolute inset-0">
+                                        <div v-for="box in boxesOnPage" :key="box.id"
+                                            :class="['absolute rounded-sm border-2', ...boxClass(box)]"
+                                            :style="{
+                                                left: `${box.bbox[0] * width}px`,
+                                                top: `${box.bbox[1] * height}px`,
+                                                width: `${(box.bbox[2] - box.bbox[0]) * width}px`,
+                                                height: `${(box.bbox[3] - box.bbox[1]) * height}px`,
+                                            }">
+                                            <span v-if="box.kind === 'field'"
+                                                class="absolute -top-4 left-0 whitespace-nowrap rounded bg-slate-800/80 px-1 py-px text-[9px] font-bold text-white">
+                                                {{ box.key }}
+                                            </span>
+                                        </div>
                                     </div>
-                                </div>
-                            </template>
-                        </PdfPageCanvas>
+                                </template>
+                            </PdfPageCanvas>
+                        </div>
+                        <p class="mt-2 text-center text-[11px] text-slate-400">
+                            Ctrl + scroll to zoom · hold right-click and drag to pan
+                        </p>
                     </div>
 
                     <!-- Right: validation panel -->
@@ -581,6 +659,17 @@ const typeLabel = computed(() => ({ invoice: 'Invoice', purchase_order: 'Purchas
                         :readonly="!editable"
                         @update:model-value="dirty = true"
                     />
+                    <div v-if="derivedCells.length"
+                        class="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-xs text-sky-800">
+                        <p class="font-bold">Calculated from the row's other values</p>
+                        <ul class="mt-1 space-y-0.5">
+                            <li v-for="cell in derivedCells" :key="cell.id">
+                                Row {{ cell.row }} · <span class="font-semibold">{{ cell.label }}</span>
+                                — computed as {{ cell.source }}<template v-if="cell.raw"> (OCR read “{{ cell.raw }}”)</template>.
+                            </li>
+                        </ul>
+                        <p class="mt-1 text-sky-700">Check it against the document and correct it if the calculation is wrong.</p>
+                    </div>
                 </div>
             </div>
         </div>

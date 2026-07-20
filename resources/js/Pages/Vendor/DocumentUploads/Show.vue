@@ -1,13 +1,29 @@
 <script setup>
+import { onMounted, ref } from 'vue';
 import { Head, Link, router } from '@inertiajs/vue3';
 import VendorLayout from '@/Layouts/VendorLayout.vue';
 import StatusBadge from '@/Components/Portal/StatusBadge.vue';
 import DocumentTimeline from '@/Components/Portal/DocumentTimeline.vue';
-import { ArrowLeftIcon } from '@heroicons/vue/24/outline';
+import PdfPageCanvas from '@/Components/Portal/Annotator/PdfPageCanvas.vue';
+import { usePdfDocument } from '@/Composables/usePdfDocument';
+import { usePdfViewport } from '@/Composables/usePdfViewport';
+import {
+    ArrowLeftIcon, MagnifyingGlassMinusIcon, MagnifyingGlassPlusIcon,
+} from '@heroicons/vue/24/outline';
 
 const props = defineProps({
     document: { type: Object, required: true },
 });
+
+// ---- document viewer (same zoom + right-drag pan as the staff screens) ----
+const { doc, numPages, loading: pdfLoading, error: pdfError, load } = usePdfDocument();
+const page = ref(1);
+const {
+    ZOOM_MIN, ZOOM_MAX, zoom, zoomPercent, zoomIn, zoomOut, zoomReset, onCanvasWheel,
+    canvasScroll, isPanning, onCanvasPointerDown, onCanvasPointerMove, endPan,
+} = usePdfViewport();
+
+onMounted(() => load(route('vendor.document-uploads.file', props.document.id)));
 
 const typeLabel = (type) => ({ invoice: 'Invoice', purchase_order: 'Purchase Order', quotation: 'Quotation' }[type] || 'Document');
 const money = (value) => (value == null ? '—' : Number(value).toLocaleString(undefined, { minimumFractionDigits: 2 }));
@@ -50,7 +66,52 @@ const cancel = () => {
         </template>
 
         <div class="grid gap-6 lg:grid-cols-3">
-            <div class="space-y-6 lg:col-span-2">
+            <div class="min-w-0 space-y-6 lg:col-span-2">
+                <div class="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
+                    <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+                        <h3 class="text-sm font-bold uppercase tracking-widest text-slate-500">Your Document</h3>
+                        <div class="flex items-center gap-3">
+                            <div v-if="numPages > 1" class="flex items-center gap-2 text-sm text-slate-600">
+                                <button type="button" class="rounded-lg bg-slate-100 px-2.5 py-1 font-bold disabled:opacity-40" :disabled="page <= 1" @click="page--">‹</button>
+                                Page {{ page }} / {{ numPages || '?' }}
+                                <button type="button" class="rounded-lg bg-slate-100 px-2.5 py-1 font-bold disabled:opacity-40" :disabled="page >= numPages" @click="page++">›</button>
+                            </div>
+                            <div class="flex items-center gap-1 rounded-lg bg-slate-100 p-1 text-slate-600">
+                                <button type="button" class="rounded-md p-1.5 hover:bg-white disabled:opacity-40" title="Zoom out"
+                                    :disabled="zoom <= ZOOM_MIN" @click="zoomOut">
+                                    <MagnifyingGlassMinusIcon class="h-4 w-4" />
+                                </button>
+                                <button type="button"
+                                    class="min-w-[3.5rem] rounded-md px-1.5 py-1 text-center text-xs font-bold hover:bg-white"
+                                    title="Reset to fit width" @click="zoomReset">
+                                    {{ zoomPercent }}%
+                                </button>
+                                <button type="button" class="rounded-md p-1.5 hover:bg-white disabled:opacity-40" title="Zoom in"
+                                    :disabled="zoom >= ZOOM_MAX" @click="zoomIn">
+                                    <MagnifyingGlassPlusIcon class="h-4 w-4" />
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <p v-if="pdfError" class="rounded-lg bg-red-50 p-3 text-sm text-red-700">{{ pdfError }}</p>
+                    <p v-else-if="pdfLoading" class="p-8 text-center text-sm text-slate-500">Loading document...</p>
+
+                    <div ref="canvasScroll"
+                        :class="['max-h-[70vh] overflow-auto rounded-lg bg-slate-50', isPanning ? 'cursor-grabbing select-none' : '']"
+                        @wheel="onCanvasWheel"
+                        @pointerdown="onCanvasPointerDown"
+                        @pointermove="onCanvasPointerMove"
+                        @pointerup="endPan"
+                        @pointercancel="endPan"
+                        @contextmenu.prevent>
+                        <PdfPageCanvas v-if="doc" :doc="doc" :page-number="page" :zoom="zoom" />
+                    </div>
+                    <p class="mt-2 text-center text-[11px] text-slate-400">
+                        Ctrl + scroll to zoom · hold right-click and drag to pan
+                    </p>
+                </div>
+
                 <div class="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
                     <h3 class="text-sm font-bold uppercase tracking-widest text-slate-500">Extracted Details</h3>
                     <dl class="mt-4 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3">

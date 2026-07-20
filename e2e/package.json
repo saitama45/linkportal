@@ -10,6 +10,8 @@
     "qa:full": "cross-env E2E_DESTRUCTIVE=1 playwright test",
     "qa:full:watch": "cross-env E2E_DESTRUCTIVE=1 SLOWMO=350 playwright test --headed",
     "qa:demo": "cross-env E2E_DESTRUCTIVE=1 SLOWMO=800 playwright test --project=setup --project=workflow --headed",
+    "qa:seed": "node seed-demo.js",
+    "qa:purge-demo": "node purge-demo.js",
     "qa:ui": "playwright test --ui",
     "qa:report": "playwright show-report",
     "qa:codegen": "playwright codegen http://127.0.0.1:8000"

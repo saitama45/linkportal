@@ -56,6 +56,7 @@ Route::prefix('vendor')->name('vendor.')->group(function () {
             Route::get('document-uploads/create', [DocumentUploadController::class, 'create'])->name('document-uploads.create');
             Route::post('document-uploads', [DocumentUploadController::class, 'store'])->name('document-uploads.store');
             Route::get('document-uploads/{documentUpload}', [DocumentUploadController::class, 'show'])->name('document-uploads.show');
+            Route::get('document-uploads/{documentUpload}/file', [DocumentUploadController::class, 'file'])->name('document-uploads.file');
             Route::put('document-uploads/{documentUpload}/cancel', [DocumentUploadController::class, 'cancel'])->name('document-uploads.cancel');
         });
     });

@@ -8,6 +8,7 @@ use App\Http\Services\DocumentIntakeService;
 use App\Models\IntakeDocument;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
 
 /**
@@ -149,6 +150,21 @@ class DocumentUploadController extends Controller
                     'created_at', 'events',
                 ]),
         ]);
+    }
+
+    /**
+     * Stream the vendor's own uploaded document for the in-page viewer. Serves
+     * the converted PDF when the original was an office file, so the viewer
+     * always receives something it can render.
+     */
+    public function file(Request $request, IntakeDocument $documentUpload)
+    {
+        abort_unless($documentUpload->vendor_id === $request->user('vendor')->id, 403);
+
+        $path = $documentUpload->converted_pdf_path ?? $documentUpload->file_path;
+        abort_unless($path && Storage::disk(DocumentIntakeService::DISK)->exists($path), 404);
+
+        return Storage::disk(DocumentIntakeService::DISK)->response($path, $documentUpload->original_filename);
     }
 
     public function cancel(Request $request, IntakeDocument $documentUpload)

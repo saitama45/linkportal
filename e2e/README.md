@@ -32,9 +32,25 @@ The app must be running (e.g. `php artisan serve` on the URL in `.env.e2e`).
 | `npm run qa:watch` | Read-only smoke, **headed + slowed — watch it click through.** Best for demos. |
 | `npm run qa:full` | **Full regression incl. the destructive workflow.** Backs up the DB first, runs everything, purges every test row after. |
 | `npm run qa:full:watch` | Same as `qa:full` but headed + slowed so you can watch the whole workflow drive itself. |
+| `npm run qa:seed` | **Seed editable demo documents and KEEP them** for a manual walkthrough (see below). |
+| `npm run qa:purge-demo` | Remove the kept demo documents when you're done inspecting. |
 | `npm run qa:ui` | Time-travel debugger — step through every action with screenshots. |
 | `npm run qa:report` | Open the HTML report from the last run (screenshots + video on failures). |
 | `npm run qa:codegen` | **Record a new test by clicking the app** — Playwright writes the code. |
+
+### Manual walkthrough with kept demo data
+
+`npm run qa:seed` uploads the real sample files in `e2e/fixtures/` (a PC Worx
+quotation and a PC Worx invoice) **through the actual OCR pipeline** — so each lands
+in **needs-validation** with a real, viewable PDF and extracted fields. It also creates
+the PC Worx invoice OCR template on first run if missing. Unlike the automated tests,
+these are **kept**: you open them at `/document-intake` and drive validate → submit →
+approve yourself. (The quotation OCRs cleanly; the invoice is a phone photo, so its
+header fields extract poorly and need manual correction — a realistic QA case.)
+
+They survive automated test runs (`qa:full` / `qa:demo` only clean their own fixtures,
+never the kept demo set). When you're finished, remove them with `npm run qa:purge-demo`.
+Both commands back up the database first.
 
 ### Safety model for `qa:full`
 

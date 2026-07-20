@@ -11,6 +11,7 @@ import AnnotationOverlay from '@/Components/Portal/Annotator/AnnotationOverlay.v
 import FieldPalette from '@/Components/Portal/Annotator/FieldPalette.vue';
 import TemplateTester from '@/Components/Portal/Annotator/TemplateTester.vue';
 import { usePdfDocument } from '@/Composables/usePdfDocument';
+import { usePdfViewport } from '@/Composables/usePdfViewport';
 import { useConfirm } from '@/Composables/useConfirm';
 import { ArrowLeftIcon, ArrowUturnLeftIcon, Bars3Icon, BeakerIcon, BookOpenIcon, CheckBadgeIcon, DocumentArrowUpIcon, MagnifyingGlassMinusIcon, MagnifyingGlassPlusIcon, PencilSquareIcon, PlusIcon, TrashIcon, XMarkIcon } from '@heroicons/vue/24/outline';
 
@@ -187,48 +188,11 @@ const page = ref(1);
 const mode = ref('field');
 const selectedFieldKey = ref(null);
 
-// ---- zoom (1 = fit-width) ----
-const ZOOM_MIN = 0.5;
-const ZOOM_MAX = 4;
-const ZOOM_STEP = 0.25;
-const zoom = ref(1);
-const zoomPercent = computed(() => Math.round(zoom.value * 100));
-const setZoom = (value) => { zoom.value = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value)); };
-const zoomIn = () => setZoom(zoom.value + ZOOM_STEP);
-const zoomOut = () => setZoom(zoom.value - ZOOM_STEP);
-const zoomReset = () => setZoom(1);
-// Ctrl/Cmd + scroll wheel zooms instead of scrolling, matching common PDF viewers.
-const onCanvasWheel = (event) => {
-    if (!event.ctrlKey && !event.metaKey) return;
-    event.preventDefault();
-    setZoom(zoom.value + (event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP));
-};
-
-// ---- pan (hold right mouse button + drag to move the document) ----
-const canvasScroll = ref(null);
-const isPanning = ref(false);
-let panStart = null; // { x, y, scrollLeft, scrollTop }
-
-const onCanvasPointerDown = (event) => {
-    if (event.button !== 2) return; // right button only — left stays for annotation drawing
-    event.preventDefault();
-    isPanning.value = true;
-    panStart = { x: event.clientX, y: event.clientY, scrollLeft: canvasScroll.value.scrollLeft, scrollTop: canvasScroll.value.scrollTop };
-    event.currentTarget.setPointerCapture(event.pointerId);
-};
-const onCanvasPointerMove = (event) => {
-    if (!isPanning.value || !panStart) return;
-    canvasScroll.value.scrollLeft = panStart.scrollLeft - (event.clientX - panStart.x);
-    canvasScroll.value.scrollTop = panStart.scrollTop - (event.clientY - panStart.y);
-};
-const endPan = (event) => {
-    if (!isPanning.value) return;
-    isPanning.value = false;
-    panStart = null;
-    if (event?.currentTarget?.releasePointerCapture && event.pointerId != null) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-};
+// ---- zoom (1 = fit-width) + right-drag pan ----
+const {
+    ZOOM_MIN, ZOOM_MAX, zoom, zoomPercent, zoomIn, zoomOut, zoomReset, onCanvasWheel,
+    canvasScroll, isPanning, onCanvasPointerDown, onCanvasPointerMove, endPan,
+} = usePdfViewport();
 
 const loadPdf = () => {
     if (version.value?.sample_file_path) {

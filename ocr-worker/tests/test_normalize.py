@@ -33,3 +33,27 @@ def test_date_written():
 
 def test_date_garbage():
     assert parse_date("pending") is None
+
+
+def test_date_rejects_underspecified():
+    """An incomplete read must not be completed from today's date — dateutil
+    fills missing components from a default, which would turn a fragment into a
+    confident, fabricated date."""
+    assert parse_date("2026") is None
+    assert parse_date("June 2026") is None
+    assert parse_date("Dec 2026") is None
+    assert parse_date("une") is None
+
+
+def test_date_repairs_digit_shaped_letters():
+    """A photographed "08," commonly OCRs as "0B,"; the day is still recoverable."""
+    assert parse_date("June 0B, 2026") == "2026-06-08"
+    assert parse_date(": June 0B, 2026 ; |") == "2026-06-08"
+    assert parse_date("June O8, 2026") == "2026-06-08"
+
+
+def test_date_repair_leaves_month_name_intact():
+    """Digit repair must only touch numeric-looking tokens, never a month name
+    (a naive substitution would rewrite the "S" in "Sep" to a 5)."""
+    assert parse_date("Sep 05, 2026") == "2026-09-05"
+    assert parse_date("August 15, 2026") == "2026-08-15"

@@ -25,7 +25,7 @@ use Illuminate\Support\Str;
  */
 class E2eSupport extends Command
 {
-    protected $signature = 'portal:e2e {action : seed-po|seed-overbill|seed-partial|seed-full|seed-pomismatch|seed-expired|inject-email|seed-pending|token|purge} {type=invoice : document type for seed-pending (invoice|purchase_order|quotation)}';
+    protected $signature = 'portal:e2e {action : seed-demo|seed-po|seed-overbill|seed-partial|seed-full|seed-pomismatch|seed-expired|inject-email|seed-pending|token|purge|purge-demo} {type=invoice : document type for seed-pending (invoice|purchase_order|quotation)}';
 
     protected $description = 'Create / clean up marked fixtures for the browser QA suite (non-production only)';
 
@@ -40,6 +40,7 @@ class E2eSupport extends Command
         }
 
         return match ($this->argument('action')) {
+            'seed-demo' => $this->seedDemo($intake),
             'seed-po' => $this->seedPo(),
             'seed-overbill' => $this->seedOverbill(),
             'seed-partial' => $this->seedPartial(),
@@ -50,6 +51,7 @@ class E2eSupport extends Command
             'seed-pending' => $this->seedPending(),
             'token' => $this->issueToken(),
             'purge' => $this->purge(),
+            'purge-demo' => $this->purgeDemo(),
             default => $this->errorOut('Unknown action.'),
         };
     }
@@ -147,6 +149,92 @@ class E2eSupport extends Command
         $this->evaluate($inv);
 
         return $this->emit(['invoice_id' => $inv->id, 'po_id' => $po->id, 'validity_days' => 30]);
+    }
+
+    /**
+     * Populate EDITABLE demo documents from REAL sample files (e2e/fixtures),
+     * run through the actual OCR pipeline — so each has a viewable PDF and
+     * extracted fields — and keep them for a manual walkthrough. They land in
+     * needs_validation (NOT approved). Marked via an `E2E-DEMO ` filename prefix
+     * so automated-test `purge` leaves them and `purge-demo` clears them.
+     */
+    private function seedDemo(DocumentIntakeService $intake): int
+    {
+        $vendor = $this->testVendor();
+        $userId = User::query()->value('id');
+        $this->ensureInvoiceTemplate($vendor, $userId);
+
+        // The quotation matches the existing PO template; the invoice matches the
+        // template ensured above. Both are real PC Worx documents.
+        $samples = [
+            ['file' => 'demo-quotation.pdf', 'name' => self::MARK.'DEMO Monitor Signed Quotation.pdf', 'type' => 'purchase_order'],
+            ['file' => 'demo-invoice.pdf', 'name' => self::MARK.'DEMO Invoice 11612.pdf', 'type' => 'invoice'],
+        ];
+
+        $created = [];
+        foreach ($samples as $s) {
+            $abs = base_path('e2e/fixtures/'.$s['file']);
+            if (! is_file($abs)) {
+                $this->warn("Missing sample file: {$abs}");
+
+                continue;
+            }
+            $upload = new \Illuminate\Http\UploadedFile($abs, $s['name'], 'application/pdf', null, true);
+            $doc = $intake->createFromAdminUpload($vendor, $upload, $s['type'], $userId);
+            $created[] = ['id' => $doc->id, 'reference_no' => $doc->reference_no, 'type' => $s['type'], 'status' => $doc->fresh()->status];
+        }
+
+        return $this->emit([
+            'seeded' => $created,
+            'note' => 'real files via the OCR pipeline; editable (needs_validation); kept until `php artisan portal:e2e purge-demo`',
+        ]);
+    }
+
+    /**
+     * Create the vendor's invoice OCR template (idempotent) so invoice uploads
+     * have a template to extract against. Annotations are estimated from the
+     * sample; refine them in the OCR Templates editor if extraction is off.
+     */
+    private function ensureInvoiceTemplate(Vendor $vendor, ?int $userId): void
+    {
+        if (\App\Models\DocumentTemplate::where('vendor_id', $vendor->id)->where('document_type', 'invoice')->exists()) {
+            return;
+        }
+        $abs = base_path('e2e/fixtures/demo-invoice.pdf');
+        if (! is_file($abs)) {
+            return;
+        }
+
+        $tpl = \App\Models\DocumentTemplate::create([
+            'vendor_id' => $vendor->id, 'company_id' => $vendor->company_id, 'document_type' => 'invoice',
+            'name' => $vendor->name.' Invoice', 'status' => 'active', 'created_by' => $userId,
+        ]);
+        $samplePath = "portal/templates/{$tpl->id}/sample.pdf";
+        \Illuminate\Support\Facades\Storage::disk('local')->put($samplePath, file_get_contents($abs));
+
+        $annotations = [
+            'schema' => 1,
+            'fields' => [
+                ['key' => 'invoice_no', 'label' => 'Invoice No.', 'type' => 'text', 'required' => true, 'page' => 1, 'bbox' => [0.70, 0.145, 0.87, 0.185]],
+                ['key' => 'document_date', 'label' => 'Invoice Date', 'type' => 'date', 'required' => true, 'page' => 1, 'bbox' => [0.70, 0.175, 0.87, 0.205]],
+                ['key' => 'total_amount', 'label' => 'Total', 'type' => 'amount', 'required' => true, 'page' => 1, 'bbox' => [0.78, 0.74, 0.93, 0.785]],
+            ],
+            'table' => [
+                'page' => 1, 'repeat_on_following_pages' => false, 'bbox' => [0.09, 0.298, 0.89, 0.335],
+                'columns' => [
+                    ['key' => 'description', 'label' => 'Description', 'x0' => 0.103, 'x1' => 0.58],
+                    ['key' => 'quantity', 'label' => 'Quantity', 'x0' => 0.58, 'x1' => 0.64],
+                    ['key' => 'unit_price', 'label' => 'Unit Price', 'x0' => 0.64, 'x1' => 0.753],
+                    ['key' => 'line_total', 'label' => 'Line Total', 'x0' => 0.753, 'x1' => 0.88],
+                ],
+            ],
+        ];
+
+        $ver = $tpl->versions()->create([
+            'version_no' => 1, 'annotations' => $annotations, 'sample_file_path' => $samplePath,
+            'status' => 'active', 'activated_at' => now(), 'created_by' => $userId,
+        ]);
+        $tpl->update(['active_version_id' => $ver->id]);
     }
 
     /** An approved PO with a known total and line items to reconcile against. */
@@ -258,26 +346,17 @@ class E2eSupport extends Command
         return $this->emit(['token' => $token->plainTextToken]);
     }
 
-    /** Delete every marked fixture. Only touches rows carrying the E2E- marker. */
+    /**
+     * Delete automated-test fixtures. Deliberately LEAVES the kept demo data
+     * (reference_no `E2E-DEMO-…`) alone, so a test run's teardown never wipes the
+     * documents someone is manually walking through. Use `purge-demo` for those.
+     */
     private function purge(): int
     {
-        $ids = IntakeDocument::withTrashed()
-            ->where(fn ($q) => $q->where('original_filename', 'like', self::MARK.'%')
-                ->orWhere('reference_no', 'like', self::MARK.'%'))
-            ->pluck('id');
-
-        $counts = [
-            'ap_statuses' => ApInvoiceStatus::whereIn('intake_document_id', $ids)
-                ->orWhere('invoice_no', 'like', self::MARK.'%')->delete(),
-            'exceptions' => DocumentException::whereIn('intake_document_id', $ids)->delete(),
-            'events' => DocumentEvent::whereIn('intake_document_id', $ids)->delete(),
-            'line_items' => IntakeLineItem::whereIn('intake_document_id', $ids)->delete(),
-            'integration_calls' => \App\Models\IntegrationCall::where('subject_type', IntakeDocument::class)
-                ->whereIn('subject_id', $ids)->delete(),
-            'documents' => IntakeDocument::withTrashed()->whereIn('id', $ids)->forceDelete(),
-            'inbound_emails' => InboundEmail::where('subject', 'like', self::MARK.'%')
-                ->orWhere('message_id', 'like', self::MARK.'%')->delete(),
-        ];
+        $ids = $this->markedDocIds(demoOnly: false);
+        $counts = $this->deleteDocsAndChildren($ids);
+        $counts['inbound_emails'] = InboundEmail::where('subject', 'like', self::MARK.'%')
+            ->orWhere('message_id', 'like', self::MARK.'%')->delete();
 
         // Reset the PO-expiration policy the expired-scenario switches on (default =
         // never). Model instance so the array→json cast applies on write.
@@ -285,6 +364,48 @@ class E2eSupport extends Command
             ?->update(['config' => ['validity_days' => null]]);
 
         return $this->emit(['purged' => $counts]);
+    }
+
+    /** Delete the kept demo documents (run when done with the manual walkthrough). */
+    private function purgeDemo(): int
+    {
+        $ids = $this->markedDocIds(demoOnly: true);
+        $counts = $this->deleteDocsAndChildren($ids);
+        \Illuminate\Support\Facades\Storage::disk('local')->deleteDirectory('portal/intake/e2e-demo');
+
+        return $this->emit(['purged_demo' => $counts]);
+    }
+
+    /**
+     * IDs of E2E-marked documents. demoOnly:true = only the kept demo set;
+     * demoOnly:false = everything else (automated-test fixtures).
+     */
+    private function markedDocIds(bool $demoOnly)
+    {
+        // Kept demo docs are tagged by an `E2E-DEMO ` filename prefix (real files
+        // keep their natural DOC- reference), so match demo on either column.
+        $isDemo = fn ($q) => $q->where('reference_no', 'like', self::MARK.'DEMO%')
+            ->orWhere('original_filename', 'like', self::MARK.'DEMO%');
+
+        return IntakeDocument::withTrashed()
+            ->where(fn ($q) => $q->where('original_filename', 'like', self::MARK.'%')
+                ->orWhere('reference_no', 'like', self::MARK.'%'))
+            ->when($demoOnly, fn ($q) => $q->where($isDemo), fn ($q) => $q->whereNot($isDemo))
+            ->pluck('id');
+    }
+
+    /** Cascade-delete a set of intake documents and all their children. */
+    private function deleteDocsAndChildren($ids): array
+    {
+        return [
+            'ap_statuses' => ApInvoiceStatus::whereIn('intake_document_id', $ids)->delete(),
+            'exceptions' => DocumentException::whereIn('intake_document_id', $ids)->delete(),
+            'events' => DocumentEvent::whereIn('intake_document_id', $ids)->delete(),
+            'line_items' => IntakeLineItem::whereIn('intake_document_id', $ids)->delete(),
+            'integration_calls' => \App\Models\IntegrationCall::where('subject_type', IntakeDocument::class)
+                ->whereIn('subject_id', $ids)->delete(),
+            'documents' => IntakeDocument::withTrashed()->whereIn('id', $ids)->forceDelete(),
+        ];
     }
 
     private function emit(array $data): int

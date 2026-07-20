@@ -10,7 +10,7 @@ from typing import List, Optional
 import fitz
 
 from .config import get_settings
-from .engines.tesseract_engine import ocr_words
+from .engines.tesseract_engine import NUMERIC_WHITELIST, ocr_words
 from .normalize import normalize_value
 from .pdfio import Word, embedded_words, page_meta
 
@@ -76,21 +76,81 @@ def _union_bbox(words: List[Word]) -> Optional[List[float]]:
     ]
 
 
+# A character whitelist is applied only to the purely numeric types: constraining
+# the alphabet measurably degrades Tesseract's LSTM on text-bearing values (it
+# drops the month name off a date entirely).
+TYPED = ("date", "amount", "qty")
+TYPE_WHITELISTS = {"amount": NUMERIC_WHITELIST, "qty": NUMERIC_WHITELIST}
+
+# Below this confidence a field is re-read from a larger render. Digit damage on a
+# photographed page is often just a shortage of pixels: at the base resolution a
+# "0" fused to a table rule reads as "9", and the same region rendered several
+# times larger resolves it. Matches the threshold the validation screen calls low.
+ESCALATE_BELOW = 0.75
+ESCALATION_FACTOR = 4
+ESCALATION_DPI_CAP = 1600
+
+
+def _candidate(words: List[Word], field_type: str, dayfirst: bool) -> dict:
+    raw_text = _joined_text(words)
+    flat = raw_text.replace("\n", " ").strip()
+    value, ok = normalize_value(flat, field_type, dayfirst=dayfirst)
+    return {
+        "words": words, "raw_text": raw_text, "flat": flat,
+        "value": value, "ok": ok, "confidence": _mean_confidence(words),
+    }
+
+
+def _better(new: dict, current: dict, typed: bool) -> dict:
+    """For a typed field a value that actually parses beats one that does not,
+    however sure the engine was of its guess; otherwise the more confident read
+    wins. Tesseract's own confidence tracks correctness well within one region,
+    so this reliably picks the good read out of a set of passes."""
+    if typed and new["ok"] != current["ok"]:
+        return new if new["ok"] else current
+    return new if new["confidence"] > current["confidence"] else current
+
+
 def _extract_field(doc: fitz.Document, field: dict, meta: list, lang: str, dpi: int,
                    engine_used: dict, dayfirst: bool) -> dict:
     page_no = int(field.get("page", 1))
     page = doc[page_no - 1]
     has_text = meta[page_no - 1]["has_text_layer"]
-    words, engine = _words_for(page, field["bbox"], has_text, lang, dpi)
+    bbox = field["bbox"]
+    words, engine = _words_for(page, bbox, has_text, lang, dpi)
     engine_used.setdefault(str(page_no), engine)
 
-    raw_text = _joined_text(words)
-    flat = raw_text.replace("\n", " ").strip()
-    value, ok = normalize_value(flat, field.get("type", "text"), dayfirst=dayfirst)
-    confidence = _mean_confidence(words)
+    field_type = field.get("type", "text")
+    typed = field_type in TYPED
+    best = _candidate(words, field_type, dayfirst)
+
+    # A page with a text layer is read exactly, so extra passes would add nothing.
+    # A photographed one is worth reading more than one way: the default
+    # segmentation expects paragraph structure and on a short isolated value it
+    # both fragments the text ("une" for an invoice date) and mis-shapes digits
+    # ("11642" for 11612), while reporting healthy confidence either way. Reading
+    # the region several ways and keeping the best-scoring result costs a few
+    # extra crops on a handful of header fields and corrects both failures.
+    if engine == "tesseract":
+        whitelist = TYPE_WHITELISTS.get(field_type)
+        best = _better(_candidate(
+            ocr_words(page, bbox, lang=lang, dpi=dpi, psm=7,
+                      whitelist=whitelist, min_conf=30, enhance=True),
+            field_type, dayfirst), best, typed)
+
+        if not best["ok"] or best["confidence"] < ESCALATE_BELOW:
+            hi_dpi = min(dpi * ESCALATION_FACTOR, ESCALATION_DPI_CAP)
+            if hi_dpi > dpi:
+                best = _better(_candidate(
+                    ocr_words(page, bbox, lang=lang, dpi=hi_dpi, psm=7,
+                              whitelist=whitelist, min_conf=30, enhance=True),
+                    field_type, dayfirst), best, typed)
+
+    words, raw_text, value, ok = best["words"], best["raw_text"], best["value"], best["ok"]
+    confidence = best["confidence"]
     if not words and field.get("required"):
         confidence = 0.0
-    elif not ok and field.get("type") in ("amount", "qty", "date"):
+    elif not ok and typed:
         confidence = round(confidence * 0.5, 4)
 
     return {
@@ -99,7 +159,7 @@ def _extract_field(doc: fitz.Document, field: dict, meta: list, lang: str, dpi: 
         "raw_text": raw_text,
         "confidence": confidence,
         "page": page_no,
-        "bbox": _union_bbox(words) or field["bbox"],
+        "bbox": _union_bbox(words) or bbox,
     }
 
 
@@ -167,6 +227,61 @@ def _fill_empty_cells(page: fitz.Page, cells: dict, columns: list, line: List[Wo
         cell["raw_text"] = text
         cell["confidence"] = _mean_confidence(words)
         cell["_words"] = words
+
+
+# How far a read line total may sit from quantity x unit_price and still be
+# treated as a damaged read of that product rather than a real difference. OCR
+# damage concentrates in the trailing digits — a table rule fused to the last
+# glyph turns "4,700.00" into "4,700.04" — so this is an absolute cents-level
+# allowance, deliberately not a percentage: a genuine discount or a real pricing
+# discrepancy is always larger than this and must survive to a human.
+ARITHMETIC_TOLERANCE = 1.0
+
+
+def _cell_number(cells: dict, key: str) -> Optional[float]:
+    value = cells.get(key, {}).get("value")
+    return value if isinstance(value, (int, float)) else None
+
+
+def _apply_derived(cells: dict, key: str, value: float, source: str) -> None:
+    """Write a value the arithmetic produced, leaving raw_text as whatever OCR
+    actually read so the original is still auditable on the validation screen."""
+    cell = cells.get(key)
+    if cell is None:
+        return
+    cell["value"] = round(value, 2)
+    cell["derived_from"] = source
+
+
+def _reconcile_row_arithmetic(cells: dict) -> None:
+    """A standard line item satisfies quantity x unit_price = line_total.
+
+    That invariant is stronger evidence than any single read: the quantity and
+    unit price are short, well-separated values that OCR gets right far more
+    often than the line total, which sits hard against the table's right-hand
+    rule and picks up its stroke. So when two of the three are known the third
+    is filled in, and a line total that disagrees with the product only at the
+    cents level is replaced by it. A larger disagreement is left exactly as read
+    — it may be a real discrepancy, and silently "fixing" it would destroy the
+    signal an approver needs.
+    """
+    if not all(k in cells for k in ("quantity", "unit_price", "line_total")):
+        return
+
+    qty = _cell_number(cells, "quantity")
+    price = _cell_number(cells, "unit_price")
+    total = _cell_number(cells, "line_total")
+
+    if qty is not None and price is not None:
+        expected = qty * price
+        if total is None:
+            _apply_derived(cells, "line_total", expected, "quantity x unit_price")
+        elif abs(total - expected) <= ARITHMETIC_TOLERANCE and round(total, 2) != round(expected, 2):
+            _apply_derived(cells, "line_total", expected, "quantity x unit_price")
+    elif total is not None and qty is not None and price is None and qty:
+        _apply_derived(cells, "unit_price", total / qty, "line_total / quantity")
+    elif total is not None and price is not None and qty is None and price:
+        _apply_derived(cells, "quantity", total / price, "line_total / unit_price")
 
 
 def _merge_continuation(base: dict, extra: dict, columns: list, dayfirst: bool) -> None:
@@ -243,6 +358,9 @@ def _extract_table(doc: fitz.Document, table: dict, meta: list, lang: str, dpi: 
                 grouped.append(cells)
 
         for cells in grouped:
+            # Only once the row is whole — continuation lines merged, empty cells
+            # retried — is the quantity/price/total triple final enough to trust.
+            _reconcile_row_arithmetic(cells)
             row = _finalize_row(cells, page_no, len(rows))
             if row:
                 rows.append(row)
