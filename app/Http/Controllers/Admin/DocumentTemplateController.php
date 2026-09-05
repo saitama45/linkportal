@@ -53,7 +53,7 @@ class DocumentTemplateController extends Controller
         abort_unless($request->user()->can('document-templates.create'), 403);
 
         $validated = $request->validate([
-            'vendor_id' => 'nullable|exists:portal_vendors,id',
+            'vendor_id' => 'nullable|exists:vendors,id',
             'document_type' => 'required|in:invoice,purchase_order,quotation',
             'name' => 'required|string|max:100',
             'description' => 'nullable|string|max:255',
@@ -107,7 +107,7 @@ class DocumentTemplateController extends Controller
         abort_unless($request->user()->can('document-templates.edit'), 403);
 
         $validated = $request->validate([
-            'vendor_id' => 'nullable|exists:portal_vendors,id',
+            'vendor_id' => 'nullable|exists:vendors,id',
             'document_type' => 'sometimes|required|in:invoice,purchase_order,quotation',
             'name' => 'required|string|max:100',
             'description' => 'nullable|string|max:255',

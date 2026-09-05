@@ -31,8 +31,21 @@ return Application::configure(basePath: dirname(__DIR__))
             \App\Http\Middleware\HandleInertiaRequests::class,
         ]);
 
+        // Per-app CSRF cookie name: the default "XSRF-TOKEN" is shared with every
+        // other Laravel app on this host (cookies ignore the port), which is a
+        // guaranteed 419 when the back office is open in the same browser.
+        // replaceInGroup, not replace: the CSRF middleware lives in the `web`
+        // group, and replace() only rewrites the global stack.
+        $middleware->replaceInGroup(
+            'web',
+            \Illuminate\Foundation\Http\Middleware\ValidateCsrfToken::class,
+            \App\Http\Middleware\ValidateCsrfToken::class,
+        );
+
         $middleware->alias([
             'vendor.active' => \App\Http\Middleware\EnsureVendorIsActive::class,
+            'vendor.cashier' => \App\Http\Middleware\EnsureVendorIsCashier::class,
+            'vendor.trading' => \App\Http\Middleware\EnsureVendorIsNotCashier::class,
         ]);
 
         $middleware->redirectGuestsTo(function (\Illuminate\Http\Request $request) {

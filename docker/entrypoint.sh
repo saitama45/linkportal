@@ -57,6 +57,14 @@ php artisan migrate --path=database/migrations/portal/2026_07_13_000001_add_extr
   || echo "[entrypoint] WARNING: intake-line-items extra-column migration failed."
 php artisan migrate --path=database/migrations/portal/2026_07_18_000001_add_matched_po_to_portal_intake_documents.php --force \
   || echo "[entrypoint] WARNING: matched-po column migration failed."
+# Merges portal_vendors into the shared `vendors` table. Must run before the app
+# serves traffic: the vendor guard authenticates against `vendors` from here on.
+php artisan migrate --path=database/migrations/portal/2026_09_05_000001_merge_portal_vendors_into_vendors.php --force \
+  || echo "[entrypoint] WARNING: vendor table merge migration failed."
+# Email OTP codes for vendor registration. Required before the app serves
+# traffic: registration and login both write to this table.
+php artisan migrate --path=database/migrations/portal/2026_09_05_000002_create_portal_email_otps_table.php --force \
+  || echo "[entrypoint] WARNING: email-otp table migration failed."
 php artisan db:seed --class=DocumentExceptionRuleSeeder --force \
   || echo "[entrypoint] WARNING: exception-rule seed failed."
 

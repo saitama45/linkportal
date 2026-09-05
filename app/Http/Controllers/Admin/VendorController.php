@@ -22,7 +22,9 @@ class VendorController extends Controller
 {
     public function index(Request $request)
     {
-        $query = Vendor::with('company:id,name')->latest();
+        // `vendors` is shared with the back office, which also holds reference-only
+        // vendors that have no login. This screen is the portal account queue.
+        $query = Vendor::withPortalAccess()->with('company:id,name')->latest();
 
         if ($request->filled('search')) {
             $query->where(function ($q) use ($request) {
@@ -58,7 +60,7 @@ class VendorController extends Controller
                 Rule::exists('companies', 'id')->where('is_active', true),
             ],
             'name' => 'required|string|max:255',
-            'email' => 'required|string|email|max:255|unique:portal_vendors,email',
+            'email' => 'required|string|email|max:255|unique:vendors,email',
             'phone' => 'nullable|string|max:30',
             'vendor_type' => [
                 'nullable',
@@ -81,6 +83,7 @@ class VendorController extends Controller
                 'phone' => $validated['phone'] ?? null,
                 'vendor_type' => $validated['vendor_type'] ?? null,
                 'status' => 'pending',
+                'is_active' => false,
                 'email_verified_at' => now(),
                 'created_by' => $request->user()->id,
                 'updated_by' => $request->user()->id,
@@ -109,6 +112,8 @@ class VendorController extends Controller
 
     public function show(Vendor $vendor)
     {
+        abort_unless($vendor->hasPortalAccess(), 404);
+
         return Inertia::render('Vendors/Show', [
             'vendor' => $vendor->load([
                 'company:id,name',
@@ -124,6 +129,7 @@ class VendorController extends Controller
     public function update(Request $request, Vendor $vendor)
     {
         abort_unless($request->user()->can('vendors.edit'), 403);
+        abort_unless($vendor->hasPortalAccess(), 404);
 
         $validated = $request->validate([
             'company_id' => [
@@ -136,7 +142,7 @@ class VendorController extends Controller
                 'string',
                 'email',
                 'max:255',
-                Rule::unique('portal_vendors', 'email')->ignore($vendor->id),
+                Rule::unique('vendors', 'email')->ignore($vendor->id),
             ],
             'phone' => 'nullable|string|max:30',
             'vendor_type' => [
@@ -178,6 +184,8 @@ class VendorController extends Controller
      */
     public function updateStatus(Request $request, Vendor $vendor)
     {
+        abort_unless($vendor->hasPortalAccess(), 404);
+
         $validated = $request->validate([
             'status' => 'required|in:active,suspended,deactivated',
             'remarks' => 'nullable|string|max:1000',
@@ -187,6 +195,8 @@ class VendorController extends Controller
 
         $vendor->update([
             'status' => $validated['status'],
+            // `is_active` is what the back office and its payment screens read.
+            'is_active' => $validated['status'] === 'active',
             'approved_by' => $validated['status'] === 'active' ? $request->user()->id : $vendor->approved_by,
             'approved_at' => $validated['status'] === 'active' ? now() : $vendor->approved_at,
         ]);

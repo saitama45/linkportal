@@ -9,6 +9,7 @@ import {
     ArrowLeftOnRectangleIcon,
     ArrowUpTrayIcon,
     BanknotesIcon,
+    TicketIcon,
     Bars3Icon,
     ChevronDownIcon,
     DocumentTextIcon,
@@ -37,12 +38,33 @@ watch(() => page.props.flash, (flash) => {
     if (flash?.info) { showInfo(flash.info); page.props.flash.info = null; }
 }, { deep: true, immediate: true });
 
-const nav = [
+// `requiresActive` mirrors the `vendor.active` middleware on these routes: a
+// pending vendor only gets bounced back with an error, so don't advertise them.
+// Documents stays visible — uploading accreditation papers is how a pending
+// vendor gets approved in the first place.
+//
+// `requiresTrading` mirrors `vendor.trading`: a cashier is a store till, never
+// accredited and never paid through AP, so none of that side applies to it.
+const allNav = [
     { label: 'Dashboard', route: 'vendor.dashboard', active: 'vendor.dashboard', icon: Squares2X2Icon },
-    { label: 'Uploads', route: 'vendor.document-uploads.index', active: 'vendor.document-uploads.*', icon: ArrowUpTrayIcon },
-    { label: 'Payments', route: 'vendor.accounts-payable.index', active: 'vendor.accounts-payable.*', icon: BanknotesIcon },
-    { label: 'Documents', route: 'vendor.documents.index', active: 'vendor.documents.*', icon: DocumentTextIcon },
+    { label: 'Uploads', route: 'vendor.document-uploads.index', active: 'vendor.document-uploads.*', icon: ArrowUpTrayIcon, requiresActive: true, requiresTrading: true },
+    { label: 'Payments', route: 'vendor.accounts-payable.index', active: 'vendor.accounts-payable.*', icon: BanknotesIcon, requiresActive: true, requiresTrading: true },
+    { label: 'Documents', route: 'vendor.documents.index', active: 'vendor.documents.*', icon: DocumentTextIcon, requiresTrading: true },
+    // Cashier-only, and only once a store is assigned — mirrors the
+    // `vendor.cashier` middleware, which is what actually enforces it.
+    { label: 'Campaigns', route: 'vendor.campaigns.index', active: 'vendor.campaigns.*', icon: TicketIcon, requiresActive: true, requiresCashier: true },
 ];
+
+const isApproved = computed(() => vendor.value.status === 'active');
+// Campaigns additionally needs an assigned store; the trading gate does not —
+// a cashier awaiting its store assignment is still not a supplier.
+const isCashierType = computed(() => vendor.value.vendor_type === 'Cashier');
+const isCashier = computed(() => isCashierType.value && !!vendor.value.store_id);
+const nav = computed(() => allNav.filter((item) => (
+    (!item.requiresActive || isApproved.value)
+    && (!item.requiresCashier || isCashier.value)
+    && (!item.requiresTrading || !isCashierType.value)
+)));
 
 const isActive = (pattern) => route().current(pattern);
 const logout = () => router.post(route('vendor.logout'));
@@ -105,7 +127,7 @@ onUnmounted(() => document.removeEventListener('click', closeOnOutside));
                                 <Link :href="route('vendor.profile.edit')"
                                     class="flex items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-600 hover:bg-emerald-50 hover:text-emerald-600 transition-all">
                                     <UserCircleIcon class="h-5 w-5 opacity-70" />
-                                    Company Profile
+                                    Profile
                                 </Link>
                                 <button @click="logout"
                                     class="flex w-full items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-bold text-red-500 hover:bg-red-50 transition-all">

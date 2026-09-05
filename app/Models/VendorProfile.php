@@ -24,6 +24,10 @@ class VendorProfile extends Model
         'website',
         'payment_terms',
         'currency',
+        'cheque_payee_name',
+        'cheque_delivery_method',
+        'cheque_is_crossed',
+        'cheque_remarks',
         'pending_changes',
         'approval_status',
         'reviewed_by',
@@ -35,6 +39,7 @@ class VendorProfile extends Model
     {
         return [
             'pending_changes' => 'array',
+            'cheque_is_crossed' => 'boolean',
             'reviewed_at' => 'datetime',
         ];
     }

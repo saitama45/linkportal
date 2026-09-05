@@ -14,7 +14,7 @@
     "qa:purge-demo": "node purge-demo.js",
     "qa:ui": "playwright test --ui",
     "qa:report": "playwright show-report",
-    "qa:codegen": "playwright codegen http://127.0.0.1:8000"
+    "qa:codegen": "playwright codegen http://127.0.0.1:8002"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",

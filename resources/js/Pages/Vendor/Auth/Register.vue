@@ -3,6 +3,12 @@ import { Head, Link, useForm } from '@inertiajs/vue3';
 import InputError from '@/Components/InputError.vue';
 import { LinkIcon } from '@heroicons/vue/24/outline';
 
+// Managed in the back office (reference_options), never hard-coded here — a
+// type an admin adds on /vendors must appear in this list without a deploy.
+const props = defineProps({
+    vendorTypes: { type: Array, default: () => [] },
+});
+
 const form = useForm({
     name: '',
     email: '',
@@ -12,13 +18,6 @@ const form = useForm({
     password_confirmation: '',
 });
 
-const vendorTypes = [
-    { value: 'supplier', label: 'Supplier' },
-    { value: 'service_provider', label: 'Service Provider' },
-    { value: 'contractor', label: 'Contractor' },
-    { value: 'consultant', label: 'Consultant' },
-    { value: 'logistics', label: 'Logistics / Forwarder' },
-];
 
 const submit = () => {
     form.post(route('vendor.register'), { onFinish: () => form.reset('password', 'password_confirmation') });
@@ -28,7 +27,7 @@ const inputClass = 'block h-12 w-full rounded-xl border border-slate-200 bg-slat
 </script>
 
 <template>
-    <Head title="Vendor Registration - Link Portal" />
+    <Head title="Register - Link Portal" />
 
     <div class="vendor-auth relative flex min-h-screen items-center justify-center overflow-hidden bg-emerald-950 px-4 py-10 font-sans">
         <div class="aurora absolute inset-0"></div>
@@ -39,16 +38,17 @@ const inputClass = 'block h-12 w-full rounded-xl border border-slate-200 bg-slat
                 <span class="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-400 to-teal-500 text-emerald-950 shadow-lg shadow-emerald-500/30">
                     <LinkIcon class="h-6 w-6" />
                 </span>
-                <h1 class="text-2xl font-black tracking-tight text-white">Become a Partner</h1>
+                <h1 class="text-2xl font-black tracking-tight text-white">Create Your Account</h1>
                 <p class="mt-1 max-w-sm text-sm font-medium text-emerald-100/70">
-                    Register your company to submit invoices, purchase orders, and quotations through Link Portal.
+                    Register to work with us on Link Portal — suppliers and service partners transact here,
+                    store cashiers run the counter.
                 </p>
             </div>
 
             <div class="overflow-hidden rounded-[26px] border border-white/60 bg-white/95 p-7 shadow-2xl shadow-emerald-950/40 backdrop-blur-xl sm:p-9">
                 <form class="space-y-5" @submit.prevent="submit">
                     <div>
-                        <label class="mb-2 block text-sm font-bold text-slate-700">Company / Vendor Name</label>
+                        <label class="mb-2 block text-sm font-bold text-slate-700">Vendor Name</label>
                         <input v-model="form.name" type="text" required autofocus placeholder="Ex. Acme Supplies Inc." :class="inputClass" />
                         <InputError class="mt-2" :message="form.errors.name" />
                     </div>
@@ -67,10 +67,10 @@ const inputClass = 'block h-12 w-full rounded-xl border border-slate-200 bg-slat
                     </div>
 
                     <div>
-                        <label class="mb-2 block text-sm font-bold text-slate-700">Business Type</label>
+                        <label class="mb-2 block text-sm font-bold text-slate-700">Vendor Type</label>
                         <select v-model="form.vendor_type" :class="inputClass">
                             <option value="">Select type...</option>
-                            <option v-for="t in vendorTypes" :key="t.value" :value="t.value">{{ t.label }}</option>
+                            <option v-for="t in props.vendorTypes" :key="t" :value="t">{{ t }}</option>
                         </select>
                         <InputError class="mt-2" :message="form.errors.vendor_type" />
                     </div>
@@ -93,8 +93,8 @@ const inputClass = 'block h-12 w-full rounded-xl border border-slate-200 bg-slat
                     </button>
 
                     <p class="text-center text-xs leading-5 text-slate-400">
-                        After registering, complete your company profile and upload accreditation documents.
-                        An administrator will review and activate your account.
+                        After registering, complete your profile. An administrator reviews and activates
+                        every account before it can be used.
                     </p>
                 </form>
 

@@ -106,7 +106,7 @@ class DocumentIntakeController extends Controller
         abort_unless($request->user()->can('document-intake.validate'), 403);
 
         $validated = $request->validate([
-            'vendor_id' => 'required|integer|exists:portal_vendors,id',
+            'vendor_id' => 'required|integer|exists:vendors,id',
             'document_type' => 'required|in:invoice,purchase_order,quotation',
             'file' => 'required|file|max:20480|mimes:pdf,doc,docx',
         ]);
@@ -492,7 +492,7 @@ class DocumentIntakeController extends Controller
         abort_unless($request->user()->can('document-intake.validate'), 403);
 
         $validated = $request->validate([
-            'vendor_id' => 'nullable|exists:portal_vendors,id',
+            'vendor_id' => 'nullable|exists:vendors,id',
             'document_type' => 'nullable|in:invoice,purchase_order,quotation',
             'remember_sender' => 'nullable|boolean',
         ]);

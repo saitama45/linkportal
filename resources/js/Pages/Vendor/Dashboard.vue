@@ -9,6 +9,7 @@ import {
     BellIcon,
     DocumentTextIcon,
     ExclamationTriangleIcon,
+    TicketIcon,
 } from '@heroicons/vue/24/outline';
 
 const props = defineProps({
@@ -22,10 +23,30 @@ const props = defineProps({
 const page = usePage();
 const vendor = computed(() => page.props.auth?.vendor || {});
 
-const cards = computed(() => [
-    { label: 'Document Uploads', value: props.stats?.uploads ?? 0, sub: `${props.stats?.uploads_returned ?? 0} need your attention`, route: 'vendor.document-uploads.index', icon: ArrowUpTrayIcon, tone: 'emerald' },
-    { label: 'Documents', value: props.stats?.documents ?? 0, sub: `${props.stats?.documents_pending ?? 0} under review`, route: 'vendor.documents.index', icon: DocumentTextIcon, tone: 'indigo' },
-]);
+// Uploads sits behind the `vendor.active` middleware, so a pending vendor would
+// only be bounced back here with an error. Hide the card until approval, the
+// same way the nav hides its link.
+const isApproved = computed(() => vendor.value.status === 'active');
+
+// A cashier is a store till, not a supplier: it has no accreditation documents
+// and no invoices to upload, and `vendor.trading` refuses those routes outright,
+// so never point a cashier at them.
+const isCashier = computed(() => vendor.value.vendor_type === 'Cashier');
+
+const cards = computed(() => {
+    if (isCashier.value) {
+        return isApproved.value && vendor.value.store_id
+            ? [{ label: 'Campaigns', value: 'Open', sub: 'Loyalty stamps at your counter', route: 'vendor.campaigns.index', icon: TicketIcon, tone: 'emerald' }]
+            : [];
+    }
+
+    return [
+        ...(isApproved.value
+            ? [{ label: 'Document Uploads', value: props.stats?.uploads ?? 0, sub: `${props.stats?.uploads_returned ?? 0} need your attention`, route: 'vendor.document-uploads.index', icon: ArrowUpTrayIcon, tone: 'emerald' }]
+            : []),
+        { label: 'Documents', value: props.stats?.documents ?? 0, sub: `${props.stats?.documents_pending ?? 0} under review`, route: 'vendor.documents.index', icon: DocumentTextIcon, tone: 'indigo' },
+    ];
+});
 
 const tones = {
     emerald: 'bg-emerald-50 text-emerald-600 border-emerald-100',
@@ -38,14 +59,14 @@ const formatDate = (value) => (value ? new Date(value).toLocaleDateString() : ''
 </script>
 
 <template>
-    <Head title="Vendor Dashboard - Link Portal" />
+    <Head title="Dashboard - Link Portal" />
 
     <VendorLayout>
         <template #header>
             <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
                     <h2 class="text-2xl font-black tracking-tight text-slate-900">Welcome back, {{ vendor.name }}</h2>
-                    <p class="mt-1 text-sm text-slate-500">Your partner workspace at a glance.</p>
+                    <p class="mt-1 text-sm text-slate-500">{{ isCashier ? 'Your store counter at a glance.' : 'Your partner workspace at a glance.' }}</p>
                 </div>
                 <div class="flex items-center gap-2">
                     <span class="text-[10px] font-black uppercase tracking-widest text-slate-400">Account</span>
@@ -70,8 +91,8 @@ const formatDate = (value) => (value ? new Date(value).toLocaleDateString() : ''
         </div>
 
         <div class="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <!-- Expiring documents -->
-            <div class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <!-- Expiring documents (accreditation — trading accounts only) -->
+            <div v-if="!isCashier" class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
                 <div class="mb-4 flex items-center justify-between border-b border-slate-100 pb-4">
                     <h3 class="text-xs font-black uppercase tracking-widest text-slate-900">Expiring Accreditations</h3>
                     <Link :href="route('vendor.documents.index')" class="inline-flex items-center gap-1 text-xs font-black uppercase tracking-wider text-emerald-600 hover:text-emerald-700">

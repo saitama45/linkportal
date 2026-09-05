@@ -41,14 +41,14 @@ class VendorManagementTest extends TestCase
         $response->assertRedirect();
         $response->assertSessionHas('success');
 
-        $this->assertDatabaseHas('portal_vendors', [
+        $this->assertDatabaseHas('vendors', [
             'name' => 'Acme Supplies Inc.',
             'email' => 'vendor@example.com',
             'status' => 'pending',
             'created_by' => $user->id,
         ]);
 
-        $vendorId = (int) DB::table('portal_vendors')
+        $vendorId = (int) DB::table('vendors')
             ->where('email', 'vendor@example.com')
             ->value('id');
 
@@ -70,7 +70,7 @@ class VendorManagementTest extends TestCase
         ]);
 
         $response->assertForbidden();
-        $this->assertDatabaseMissing('portal_vendors', [
+        $this->assertDatabaseMissing('vendors', [
             'email' => 'blocked@example.com',
         ]);
     }
@@ -98,7 +98,7 @@ class VendorManagementTest extends TestCase
 
         $response->assertRedirect();
         $response->assertSessionHas('success');
-        $this->assertDatabaseHas('portal_vendors', [
+        $this->assertDatabaseHas('vendors', [
             'id' => $vendor->id,
             'code' => 'VND-TEST-001',
             'name' => 'Updated Vendor',
@@ -125,7 +125,7 @@ class VendorManagementTest extends TestCase
         ]);
 
         $response->assertForbidden();
-        $this->assertDatabaseHas('portal_vendors', [
+        $this->assertDatabaseHas('vendors', [
             'id' => $vendor->id,
             'name' => 'Protected Vendor',
             'email' => 'protected@example.com',

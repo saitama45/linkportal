@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Services\AuditLogger;
 use App\Http\Services\PortalNotifier;
 use App\Models\ReferenceOption;
+use App\Models\Store;
 use App\Models\VendorContact;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -19,8 +20,27 @@ class ProfileController extends Controller
         $vendor = $request->user('vendor');
         $vendor->loadMissing(['profile', 'contacts', 'bankAccounts']);
 
+        // A cashier is a store till, not a trading vendor: no accreditation, no
+        // TIN/VAT registration, no bank account to be paid into. Its profile is
+        // reduced to the account itself, so the tax/payment reference lists (and
+        // the maker-checker form they belong to) are not sent at all.
+        if ($vendor->isCashier()) {
+            return Inertia::render('Vendor/Profile', [
+                'vendor' => $vendor,
+                'isCashier' => true,
+                'store' => $vendor->store_id
+                    ? Store::query()->find($vendor->store_id, ['id', 'name', 'code', 'address'])
+                    : null,
+                'paymentTermsOptions' => [],
+                'currencyOptions' => [],
+                'vendorTypeOptions' => [],
+            ]);
+        }
+
         return Inertia::render('Vendor/Profile', [
             'vendor' => $vendor,
+            'isCashier' => false,
+            'store' => null,
             'paymentTermsOptions' => ReferenceOption::ofType('payment_terms')->get(),
             'currencyOptions' => ReferenceOption::ofType('currency')->get(),
             'vendorTypeOptions' => ReferenceOption::ofType('vendor_type')->get(),
@@ -51,6 +71,12 @@ class ProfileController extends Controller
             'website' => 'nullable|string|max:255',
             'payment_terms' => 'nullable|string|max:50',
             'currency' => 'nullable|string|max:3',
+            // Cheque payee details: a change here redirects money, so it goes
+            // through the same maker-checker review as the rest of the profile.
+            'cheque_payee_name' => 'nullable|string|max:255',
+            'cheque_delivery_method' => 'nullable|string|in:pickup,courier,bank_deposit',
+            'cheque_is_crossed' => 'boolean',
+            'cheque_remarks' => 'nullable|string|max:500',
         ]);
 
         $profile->forceFill([

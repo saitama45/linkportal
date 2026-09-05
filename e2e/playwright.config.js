@@ -2,7 +2,7 @@ const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '.env.e2e') });
 const { defineConfig, devices } = require('@playwright/test');
 
-const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8000';
+const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8002';
 
 /**
  * Link Portal QA automation.

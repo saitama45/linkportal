@@ -2,9 +2,11 @@
 
 namespace App\Providers;
 
+use App\Auth\VendorUserProvider;
 use App\Models\Company;
 use App\Models\PortalPersonalAccessToken;
 use App\Policies\CompanyPolicy;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Facades\Vite;
@@ -28,6 +30,13 @@ class AppServiceProvider extends ServiceProvider
 
         // Shared DB with ghelpdesk: keep API tokens in a portal-prefixed table
         Sanctum::usePersonalAccessTokenModel(PortalPersonalAccessToken::class);
+
+        // `vendors` is shared with the back office, so the vendor guard must only
+        // ever resolve rows that actually hold portal credentials.
+        Auth::provider('vendors', fn ($app, array $config) => new VendorUserProvider(
+            $app['hash'],
+            $config['model'],
+        ));
 
         Vite::prefetch(concurrency: 3);
     }

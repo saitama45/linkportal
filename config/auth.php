@@ -70,8 +70,10 @@ return [
             'model' => env('AUTH_MODEL', App\Models\User::class),
         ],
 
+        // Custom driver: filters out back-office reference vendors, which live in
+        // the same shared `vendors` table but hold no portal credentials.
         'vendors' => [
-            'driver' => 'eloquent',
+            'driver' => 'vendors',
             'model' => App\Models\Vendor::class,
         ],
     ],
@@ -103,9 +105,12 @@ return [
             'throttle' => 60,
         ],
 
+        // Its own token table: `password_reset_tokens` is keyed on the email
+        // alone, so sharing it would let a staff reset consume a vendor's token
+        // whenever the same address exists in both populations.
         'vendors' => [
             'provider' => 'vendors',
-            'table' => env('AUTH_PASSWORD_RESET_TOKEN_TABLE', 'password_reset_tokens'),
+            'table' => 'vendor_password_reset_tokens',
             'expire' => 60,
             'throttle' => 60,
         ],

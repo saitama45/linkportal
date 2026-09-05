@@ -61,7 +61,20 @@ const profileFields = [
     ['business_type', 'Business Type'], ['vat_type', 'VAT Type'], ['address', 'Address'], ['city', 'City'],
     ['province', 'Province'], ['zip_code', 'ZIP'], ['country', 'Country'], ['website', 'Website'],
     ['payment_terms', 'Payment Terms'], ['currency', 'Currency'],
+    // Cheque details: a payee change redirects money, so it must be visible in
+    // the approval diff alongside the rest of the profile.
+    ['cheque_payee_name', 'Cheque Payee'], ['cheque_delivery_method', 'Cheque Release'],
+    ['cheque_is_crossed', 'Crossed Cheque'], ['cheque_remarks', 'Cheque Remarks'],
 ];
+
+// Booleans and slugs would otherwise render as "true" / "bank_deposit".
+const displayValue = (value) => {
+    if (value === true) return 'Yes';
+    if (value === false) return 'No';
+    if (value === null || value === undefined || value === '') return '—';
+
+    return String(value).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+};
 </script>
 
 <template>
@@ -119,8 +132,8 @@ const profileFields = [
                                 <template v-for="[field, label] in profileFields" :key="field">
                                     <tr v-if="(pendingChanges[field] ?? '') !== (vendor.profile[field] ?? '')">
                                         <td class="px-4 py-2.5 font-bold text-slate-700">{{ label }}</td>
-                                        <td class="px-4 py-2.5 text-slate-500">{{ vendor.profile[field] || '—' }}</td>
-                                        <td class="px-4 py-2.5 font-semibold text-emerald-700">{{ pendingChanges[field] || '—' }}</td>
+                                        <td class="px-4 py-2.5 text-slate-500">{{ displayValue(vendor.profile[field]) }}</td>
+                                        <td class="px-4 py-2.5 font-semibold text-emerald-700">{{ displayValue(pendingChanges[field]) }}</td>
                                     </tr>
                                 </template>
                             </tbody>

@@ -6,6 +6,8 @@
 
         <!-- CSRF Token -->
         <meta name="csrf-token" content="{{ csrf_token() }}">
+        {{-- Name of this app's CSRF cookie; axios must read the same one. --}}
+        <meta name="csrf-cookie" content="{{ \App\Http\Middleware\ValidateCsrfToken::cookieName() }}">
 
         <title inertia>{{ config('app.name', 'Amalgated') }}</title>
 

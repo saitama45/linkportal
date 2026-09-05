@@ -6,13 +6,18 @@ import StatusBadge from '@/Components/Portal/StatusBadge.vue';
 import InputError from '@/Components/InputError.vue';
 import { useConfirm } from '@/Composables/useConfirm';
 import { useErrorHandler } from '@/Composables/useErrorHandler';
-import { BanknotesIcon, KeyIcon, PlusIcon, TrashIcon, UserGroupIcon } from '@heroicons/vue/24/outline';
+import { BanknotesIcon, BuildingStorefrontIcon, DocumentTextIcon, KeyIcon, PlusIcon, TrashIcon, UserGroupIcon } from '@heroicons/vue/24/outline';
 
 const props = defineProps({
     vendor: Object,
     paymentTermsOptions: Array,
     currencyOptions: Array,
     vendorTypeOptions: Array,
+    // A cashier is a store till, not a trading vendor: no accreditation, no tax
+    // registration, no bank account to be paid into. Everything that only makes
+    // sense for a supplier is dropped from the page for one.
+    isCashier: { type: Boolean, default: false },
+    store: { type: Object, default: null },
 });
 
 const { confirm } = useConfirm();
@@ -37,7 +42,23 @@ const profileForm = useForm({
     website: initial('website'),
     payment_terms: initial('payment_terms'),
     currency: initial('currency') || 'PHP',
+    cheque_payee_name: initial('cheque_payee_name'),
+    cheque_delivery_method: initial('cheque_delivery_method'),
+    cheque_is_crossed: pending.cheque_is_crossed ?? profile.cheque_is_crossed ?? false,
+    cheque_remarks: initial('cheque_remarks'),
 });
+
+const chequeDeliveryMethods = [
+    { value: 'pickup', label: 'Pick up at our office' },
+    { value: 'courier', label: 'Courier to vendor address' },
+    { value: 'bank_deposit', label: 'Deposit to bank account' },
+];
+
+// Most vendors are paid to their registered legal name; offer it rather than
+// making them retype it, since a mistyped payee cannot be encashed.
+const useLegalNameAsPayee = () => {
+    profileForm.cheque_payee_name = profileForm.legal_name || props.vendor.name || '';
+};
 
 const contactForm = useForm({ name: '', position: '', email: '', phone: '', is_primary: false });
 const bankForm = useForm({ bank_name: '', branch: '', account_name: '', account_number: '', currency: 'PHP', is_default: false });
@@ -89,29 +110,81 @@ const vatTypes = [
 </script>
 
 <template>
-    <Head title="Company Profile - Link Portal" />
+    <Head :title="(isCashier ? 'My Profile' : 'Company Profile') + ' - Link Portal'" />
 
     <VendorLayout>
         <template #header>
             <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
-                    <h2 class="text-2xl font-black tracking-tight text-slate-900">Company Profile</h2>
-                    <p class="mt-1 text-sm text-slate-500">Profile changes are reviewed by an administrator before going live (maker-checker).</p>
+                    <h2 class="text-2xl font-black tracking-tight text-slate-900">{{ isCashier ? 'My Profile' : 'Company Profile' }}</h2>
+                    <p class="mt-1 text-sm text-slate-500">
+                        {{ isCashier
+                            ? 'Your account details. The store you are assigned to is set by an administrator.'
+                            : 'Profile changes are reviewed by an administrator before going live (maker-checker).' }}
+                    </p>
                 </div>
-                <div class="flex items-center gap-2">
+                <div v-if="!isCashier" class="flex items-center gap-2">
                     <span class="text-[10px] font-black uppercase tracking-widest text-slate-400">Profile status</span>
                     <StatusBadge :status="vendor.profile?.approval_status || 'draft'" />
                 </div>
             </div>
         </template>
 
-        <div v-if="vendor.profile?.approval_status === 'pending'" class="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3.5 text-sm font-semibold text-amber-800">
+        <div v-if="!isCashier && vendor.profile?.approval_status === 'pending'" class="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3.5 text-sm font-semibold text-amber-800">
             You have profile changes awaiting administrator approval. Submitting again will replace the pending changes.
         </div>
 
         <div class="grid grid-cols-1 gap-6 xl:grid-cols-3">
-            <!-- Profile form -->
-            <div class="xl:col-span-2">
+            <!-- Cashier: read-only account card. There is nothing here for an
+                 approver to check, so the maker-checker form is not rendered. -->
+            <div v-if="isCashier" class="xl:col-span-2">
+                <div class="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm">
+                    <h3 class="mb-5 text-xs font-black uppercase tracking-widest text-slate-500">Account Details</h3>
+                    <dl class="grid grid-cols-1 gap-5 sm:grid-cols-2">
+                        <div>
+                            <dt class="text-[11px] font-black uppercase tracking-wider text-slate-400">Name</dt>
+                            <dd class="mt-1 text-sm font-bold text-slate-800">{{ vendor.name }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-[11px] font-black uppercase tracking-wider text-slate-400">Account Code</dt>
+                            <dd class="mt-1 text-sm font-bold text-slate-800">{{ vendor.code || '—' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-[11px] font-black uppercase tracking-wider text-slate-400">Email</dt>
+                            <dd class="mt-1 text-sm font-bold text-slate-800">{{ vendor.email }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-[11px] font-black uppercase tracking-wider text-slate-400">Phone</dt>
+                            <dd class="mt-1 text-sm font-bold text-slate-800">{{ vendor.phone || '—' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-[11px] font-black uppercase tracking-wider text-slate-400">Account Type</dt>
+                            <dd class="mt-1 text-sm font-bold text-slate-800">{{ vendor.vendor_type }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-[11px] font-black uppercase tracking-wider text-slate-400">Account Status</dt>
+                            <dd class="mt-1"><StatusBadge :status="vendor.status" /></dd>
+                        </div>
+                    </dl>
+
+                    <div class="mt-8 border-t border-slate-100 pt-6">
+                        <h3 class="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-slate-500">
+                            <BuildingStorefrontIcon class="h-4 w-4" /> Assigned Store
+                        </h3>
+                        <div v-if="store" class="mt-3 rounded-2xl bg-slate-50 px-4 py-3.5">
+                            <p class="text-sm font-bold text-slate-800">{{ store.name }}</p>
+                            <p class="text-xs font-semibold text-slate-500">{{ store.code || '' }}</p>
+                            <p v-if="store.address" class="mt-1 text-xs leading-5 text-slate-500">{{ store.address }}</p>
+                        </div>
+                        <p v-else class="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3.5 text-sm font-semibold text-amber-800">
+                            No store assigned yet. An administrator must assign your store before Campaigns becomes available.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Profile form (trading accounts) -->
+            <div v-else class="xl:col-span-2">
                 <form class="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm" @submit.prevent="submitProfile">
                     <h3 class="mb-5 text-xs font-black uppercase tracking-widest text-slate-500">Legal & Business Details</h3>
 
@@ -187,6 +260,63 @@ const vatTypes = [
                         </div>
                     </div>
 
+                    <!-- Cheque details -->
+                    <div class="mt-8 border-t border-slate-100 pt-6">
+                        <h3 class="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-slate-500">
+                            <DocumentTextIcon class="h-4 w-4" /> Cheque Details
+                        </h3>
+                        <p class="mt-1.5 text-[11px] leading-4 text-slate-400">
+                            Used when payment is released by cheque. The payee name must match exactly what your
+                            bank will accept, or the cheque cannot be encashed.
+                        </p>
+
+                        <div class="mt-4 grid gap-5 sm:grid-cols-2">
+                            <div class="sm:col-span-2">
+                                <div class="mb-1 flex items-center justify-between gap-3">
+                                    <label class="block text-sm font-bold text-slate-700">
+                                        Pay to the Order of <span class="font-medium text-slate-400">(name to write on the cheque)</span>
+                                    </label>
+                                    <button type="button" @click="useLegalNameAsPayee"
+                                        class="shrink-0 text-[11px] font-black uppercase tracking-wider text-emerald-600 transition hover:text-emerald-700">
+                                        Use legal name
+                                    </button>
+                                </div>
+                                <input v-model="profileForm.cheque_payee_name" type="text" :class="inputClass"
+                                    placeholder="Ex. Acme Trading Corporation" />
+                                <InputError class="mt-1" :message="profileForm.errors.cheque_payee_name" />
+                            </div>
+
+                            <div>
+                                <label class="mb-1 block text-sm font-bold text-slate-700">Cheque Release</label>
+                                <select v-model="profileForm.cheque_delivery_method" :class="inputClass">
+                                    <option value="">Select...</option>
+                                    <option v-for="m in chequeDeliveryMethods" :key="m.value" :value="m.value">{{ m.label }}</option>
+                                </select>
+                                <InputError class="mt-1" :message="profileForm.errors.cheque_delivery_method" />
+                            </div>
+
+                            <div class="flex items-end pb-1">
+                                <label class="flex items-start gap-2.5">
+                                    <input v-model="profileForm.cheque_is_crossed" type="checkbox"
+                                        class="mt-0.5 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+                                    <span class="text-sm font-semibold text-slate-600">
+                                        Crossed cheque
+                                        <span class="block text-[11px] font-medium text-slate-400">
+                                            "For Payee's Account Only" — cannot be endorsed to anyone else.
+                                        </span>
+                                    </span>
+                                </label>
+                            </div>
+
+                            <div class="sm:col-span-2">
+                                <label class="mb-1 block text-sm font-bold text-slate-700">Cheque Remarks</label>
+                                <textarea v-model="profileForm.cheque_remarks" rows="2" :class="inputClass"
+                                    placeholder="Special instructions, e.g. who may collect the cheque"></textarea>
+                                <InputError class="mt-1" :message="profileForm.errors.cheque_remarks" />
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="mt-7 flex justify-end border-t border-slate-100 pt-5">
                         <button type="submit" :disabled="profileForm.processing"
                             class="rounded-xl bg-emerald-600 px-6 py-2.5 text-sm font-bold text-white shadow-lg shadow-emerald-600/20 transition-all hover:bg-emerald-700 disabled:opacity-50">
@@ -204,11 +334,15 @@ const vatTypes = [
                         <h3 class="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-slate-500">
                             <UserGroupIcon class="h-4 w-4" /> Contacts
                         </h3>
-                        <button @click="showContactModal = true" class="rounded-lg p-1.5 text-emerald-600 transition hover:bg-emerald-50">
-                            <PlusIcon class="h-4.5 w-4.5" />
+                        <button type="button" @click="showContactModal = true"
+                            class="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-black uppercase tracking-wider text-emerald-700 transition hover:bg-emerald-100">
+                            <PlusIcon class="h-3.5 w-3.5" /> Add
                         </button>
                     </div>
-                    <p v-if="!vendor.contacts?.length" class="py-3 text-center text-xs font-medium text-slate-400">No contacts added.</p>
+                    <button v-if="!vendor.contacts?.length" type="button" @click="showContactModal = true"
+                        class="w-full rounded-xl border-2 border-dashed border-slate-200 py-4 text-xs font-bold text-slate-400 transition hover:border-emerald-300 hover:bg-emerald-50/50 hover:text-emerald-600">
+                        + Add a contact person
+                    </button>
                     <ul v-else class="space-y-2.5">
                         <li v-for="c in vendor.contacts" :key="c.id" class="flex items-start justify-between rounded-xl bg-slate-50 px-3.5 py-2.5">
                             <div class="min-w-0">
@@ -225,18 +359,22 @@ const vatTypes = [
                     </ul>
                 </div>
 
-                <!-- Bank accounts -->
-                <div class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                <!-- Bank accounts (trading only - a cashier is never paid through AP) -->
+                <div v-if="!isCashier" class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
                     <div class="mb-4 flex items-center justify-between border-b border-slate-100 pb-3">
                         <h3 class="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-slate-500">
                             <BanknotesIcon class="h-4 w-4" /> Bank Accounts
                         </h3>
-                        <button @click="showBankModal = true" class="rounded-lg p-1.5 text-emerald-600 transition hover:bg-emerald-50">
-                            <PlusIcon class="h-4.5 w-4.5" />
+                        <button type="button" @click="showBankModal = true"
+                            class="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-black uppercase tracking-wider text-emerald-700 transition hover:bg-emerald-100">
+                            <PlusIcon class="h-3.5 w-3.5" /> Add
                         </button>
                     </div>
                     <p class="mb-3 text-[11px] leading-4 text-slate-400">Bank details require verification before payments can be released against them.</p>
-                    <p v-if="!vendor.bank_accounts?.length" class="py-3 text-center text-xs font-medium text-slate-400">No bank accounts added.</p>
+                    <button v-if="!vendor.bank_accounts?.length" type="button" @click="showBankModal = true"
+                        class="w-full rounded-xl border-2 border-dashed border-slate-200 py-4 text-xs font-bold text-slate-400 transition hover:border-emerald-300 hover:bg-emerald-50/50 hover:text-emerald-600">
+                        + Add a bank account
+                    </button>
                     <ul v-else class="space-y-2.5">
                         <li v-for="b in vendor.bank_accounts" :key="b.id" class="rounded-xl bg-slate-50 px-3.5 py-2.5">
                             <div class="flex items-start justify-between">
@@ -302,7 +440,7 @@ const vatTypes = [
         </div>
 
         <!-- Bank modal -->
-        <div v-if="showBankModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div v-if="!isCashier && showBankModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm" @click="showBankModal = false"></div>
             <div class="relative w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl">
                 <div class="border-b border-slate-100 bg-slate-50/50 px-8 py-5">

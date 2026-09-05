@@ -258,14 +258,22 @@ const submit = () => {
                                 <InputError class="mt-2" :message="form.errors.password" />
                             </div>
 
-                            <label class="flex cursor-pointer select-none items-center gap-2.5">
-                                <Checkbox
-                                    v-model:checked="form.remember"
-                                    name="remember"
-                                    class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                                />
-                                <span class="text-sm font-semibold text-slate-600">Keep me signed in</span>
-                            </label>
+                            <div class="flex items-center justify-between gap-3">
+                                <label class="flex cursor-pointer select-none items-center gap-2.5">
+                                    <Checkbox
+                                        v-model:checked="form.remember"
+                                        name="remember"
+                                        class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                                    />
+                                    <span class="text-sm font-semibold text-slate-600">Keep me signed in</span>
+                                </label>
+                                <Link
+                                    :href="route('vendor.password.request')"
+                                    class="text-sm font-bold text-emerald-700 transition hover:text-emerald-900"
+                                >
+                                    Forgot password?
+                                </Link>
+                            </div>
 
                             <button
                                 type="submit"
@@ -288,7 +296,7 @@ const submit = () => {
 
                         <p class="mt-6 text-center text-sm text-slate-500">
                             New vendor or partner?
-                            <Link :href="route('vendor.register')" class="font-bold text-emerald-700 transition hover:text-emerald-900">Register your company</Link>
+                            <Link :href="route('vendor.register')" class="font-bold text-emerald-700 transition hover:text-emerald-900">Register</Link>
                         </p>
 
                         <div class="mt-7 flex items-center justify-center gap-1.5 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-xs text-slate-500">
