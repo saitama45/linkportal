@@ -185,12 +185,22 @@ class CampaignController extends Controller
         $applied = 0;
 
         $card = DB::transaction(function () use ($customer, $data, $storeId, $vendorId, &$applied) {
-            // Reuse the member's open card for this program at ANY store, the
+            // Reuse the member's ACTIVE card for this program at ANY store, the
             // way the hub does — a loyalty card follows the customer, not the
             // branch. Only a brand-new card is stamped with this till's store.
+            //
+            // A full card still waiting to be redeemed is passed over rather
+            // than matched and then refused: the customer is at the till buying
+            // again, and requiring them to claim the previous reward first
+            // would be turning away a sale. The full card stays claimable and
+            // this purchase opens the next cycle on a new card — one customer
+            // legitimately holding two cards for one program, which the
+            // redemption side already handles (`resolveRedeemScan` resolves a
+            // specific card id). Mirrors `StampController::scanAddStamp`.
             $card = StampCard::where('customer_id', $customer->id)
                 ->where('stamp_program_id', $data['stamp_program_id'])
-                ->whereIn('status', ['active', 'completed'])
+                ->where('status', 'active')
+                ->oldest('id')
                 ->first();
 
             if (! $card) {

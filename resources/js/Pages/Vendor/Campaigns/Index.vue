@@ -233,19 +233,29 @@ watch(scanTokenInput, (val) => {
     }, 150);
 });
 
-const scanCardForSelectedProgram = computed(() => scanModal.cards.find((c) => c.stamp_program_id === scanProgramId.value) || null);
+// The card this scan will actually land on — the ACTIVE one, mirroring the
+// server. A full card awaiting redemption is not it: the server leaves that one
+// alone and opens a new cycle, so treating it as the target here would show 0
+// remaining and block a sale the server is perfectly willing to take.
+const scanCardForSelectedProgram = computed(() => scanModal.cards.find((c) => c.stamp_program_id === scanProgramId.value && c.status === 'active') || null);
+
+// A completed-but-unredeemed card for the same program. Not a blocker — just
+// worth saying out loud, so the cashier knows a second card is about to start
+// and can offer the waiting reward while the customer is at the till.
+const scanFullCardAwaitingRedemption = computed(() => scanModal.cards.find((c) => c.stamp_program_id === scanProgramId.value && c.status === 'completed') || null);
+
 const scanStampsRequired = computed(() => scanCardForSelectedProgram.value?.program?.stamps_required
+    ?? scanFullCardAwaitingRedemption.value?.program?.stamps_required
     ?? props.programs.find((p) => p.id === scanProgramId.value)?.stamps_required
     ?? 0);
 const scanRemaining = computed(() => Math.max(0, scanStampsRequired.value - (scanCardForSelectedProgram.value?.stamps_count ?? 0)));
 
-// Mirrors the server's own rules, so a full card is said out loud here rather
-// than coming back as a failed request.
+// Mirrors the server's own rules, so a limit is said out loud here rather than
+// coming back as a failed request.
 const scanQuantityError = computed(() => {
     if (!scanProgramId.value) return null;
-    if (scanRemaining.value < 1) return 'This card is already full — redeem it before adding more stamps.';
     if (!scanQuantity.value || scanQuantity.value < 1) return 'Enter at least 1 stamp.';
-    if (scanQuantity.value > scanRemaining.value) {
+    if (scanRemaining.value > 0 && scanQuantity.value > scanRemaining.value) {
         return `Only ${scanRemaining.value} stamp${scanRemaining.value === 1 ? '' : 's'} left on this card.`;
     }
     return null;
@@ -983,6 +993,9 @@ const submitRedeem = () => {
                         <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Program <span class="text-rose-500">*</span></label>
                         <Autocomplete v-model="scanProgramId" :options="programOptions" placeholder="Select running campaign..." />
                         <p v-if="scanProgramId" class="mt-1.5 text-xs font-semibold text-emerald-700">{{ scanRemaining }} stamp(s) left on this card.</p>
+                        <p v-if="scanFullCardAwaitingRedemption" class="mt-1.5 text-xs font-semibold text-amber-700">
+                            This member also has a full card ({{ scanFullCardAwaitingRedemption.stamps_count }} / {{ scanFullCardAwaitingRedemption.program?.stamps_required }}) waiting to be redeemed — it stays claimable. These stamps go on a new card.
+                        </p>
                     </div>
 
                     <div class="grid gap-3 sm:grid-cols-2">
