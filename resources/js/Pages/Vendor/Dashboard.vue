@@ -36,7 +36,10 @@ const isCashier = computed(() => vendor.value.vendor_type === 'Cashier');
 const cards = computed(() => {
     if (isCashier.value) {
         return isApproved.value && vendor.value.store_id
-            ? [{ label: 'Campaigns', value: 'Open', sub: 'Loyalty stamps at your counter', route: 'vendor.campaigns.index', icon: TicketIcon, tone: 'emerald' }]
+            ? [
+                { label: 'NPC Monitoring', value: 'Open', sub: 'Download seals and upload proof of use', route: 'vendor.npc-statuses.index', icon: DocumentTextIcon, tone: 'indigo' },
+                { label: 'Campaigns', value: 'Open', sub: 'Loyalty stamps at your counter', route: 'vendor.campaigns.index', icon: TicketIcon, tone: 'emerald' },
+            ]
             : [];
     }
 

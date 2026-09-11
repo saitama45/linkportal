@@ -21,12 +21,12 @@ class EnsureVendorIsCashier
     {
         if (! CashierContext::isCashier()) {
             if ($request->expectsJson()) {
-                abort(403, 'This account does not have access to Campaigns.');
+                abort(403, 'This area requires a cashier account assigned to a store.');
             }
 
             return redirect()
                 ->route('vendor.dashboard')
-                ->with('error', 'Campaigns is available to cashier accounts assigned to a store.');
+                ->with('error', 'This area is available to cashier accounts assigned to a store.');
         }
 
         return $next($request);

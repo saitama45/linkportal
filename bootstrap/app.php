@@ -51,7 +51,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->redirectGuestsTo(function (\Illuminate\Http\Request $request) {
             // Vendor pages -> the public vendor login (/login); everything else
             // is the staff area -> the staff login (/admin/login).
-            return $request->is('vendor') || $request->is('vendor/*')
+            return $request->is('vendor') || $request->is('vendor/*') || $request->is('npc-statuses')
                 ? route('vendor.login')   // /login
                 : route('login');         // /admin/login
         });

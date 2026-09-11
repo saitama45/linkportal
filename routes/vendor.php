@@ -12,6 +12,10 @@ use App\Http\Controllers\Vendor\NotificationController;
 use App\Http\Controllers\Vendor\ProfileController;
 use Illuminate\Support\Facades\Route;
 
+// Keep the hub's familiar entry URL, protected by the vendor session.
+Route::get('npc-statuses', fn () => redirect()->route('vendor.npc-statuses.index'))
+    ->middleware(['auth:vendor', 'vendor.active', 'vendor.cashier'])->name('npc-statuses.index');
+
 // The vendor login is the portal's public entry point, so it lives at the site
 // root (/login) rather than under /vendor. Name stays `vendor.login` so all
 // route('vendor.login') references keep working.
@@ -69,6 +73,16 @@ Route::prefix('vendor')->name('vendor.')->group(function () {
 
         // Transactions require a fully active (approved) vendor account
         Route::middleware('vendor.active')->group(function () {
+            Route::middleware('vendor.cashier')->prefix('npc-statuses')->name('npc-statuses.')->group(function () {
+                $controller = \App\Http\Controllers\Vendor\NpcStatusController::class;
+                Route::get('/', [$controller, 'index'])->name('index');
+                Route::get('{npcStatus}/stores/{store}/seals/{type}/download', [$controller, 'downloadStoreSeal'])
+                    ->whereIn('type', \App\Models\NpcStatusAttachment::SEAL_TYPES)->name('stores.seal.download');
+                Route::post('{npcStatus}/stores/{store}/seals/{type}/proof', [$controller, 'uploadStoreProof'])
+                    ->whereIn('type', \App\Models\NpcStatusAttachment::SEAL_TYPES)->name('stores.proof.upload');
+                Route::get('{npcStatus}/stores/{store}/seals/{type}/proof', [$controller, 'downloadStoreProof'])
+                    ->whereIn('type', \App\Models\NpcStatusAttachment::SEAL_TYPES)->name('stores.proof.download');
+            });
             // OCR document intake (upload instead of encoding)
             Route::get('accounts-payable', [\App\Http\Controllers\Vendor\AccountsPayableController::class, 'index'])
                 ->middleware('vendor.trading')

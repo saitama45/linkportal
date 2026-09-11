@@ -53,6 +53,7 @@ const allNav = [
     // Cashier-only, and only once a store is assigned — mirrors the
     // `vendor.cashier` middleware, which is what actually enforces it.
     { label: 'Campaigns', route: 'vendor.campaigns.index', active: 'vendor.campaigns.*', icon: TicketIcon, requiresActive: true, requiresCashier: true },
+    { label: 'NPC Monitoring', route: 'vendor.npc-statuses.index', active: 'vendor.npc-statuses.*', icon: DocumentTextIcon, requiresActive: true, requiresCashier: true },
 ];
 
 const isApproved = computed(() => vendor.value.status === 'active');

@@ -30,6 +30,13 @@ return [
 
     'disks' => [
 
+        // Must be the same directory used by ghelpdesk's public disk.
+        'npc' => [
+            'driver' => 'local',
+            'root' => env('NPC_SHARED_STORAGE_PATH', base_path('../ghelpdesk/storage/app/public')),
+            'throw' => true,
+        ],
+
         'local' => [
             'driver' => 'local',
             'root' => storage_path('app/private'),
