@@ -253,7 +253,7 @@ class VendorNpcStatusTest extends TestCase
         ]);
         Storage::forgetDisk(['npc', 'public']);
         Http::fake([
-            'hub.test/storage/npc-statuses/2026/1/seal.pdf' => Http::response('%PDF-1.4 hub', 200, ['Content-Type' => 'application/pdf']),
+            'hub.test/serve-storage/npc-statuses/2026/1/seal.pdf' => Http::response('%PDF-1.4 hub', 200, ['Content-Type' => 'application/pdf']),
             'hub.test/*' => Http::response('', 404),
         ]);
         $attachment = $this->status->attachments()->create([

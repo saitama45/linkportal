@@ -54,7 +54,8 @@ deployments (it mirrors the hub's `PortalDocumentStorage`):
 - **Separate App Services** (production): the `npc` root does not exist on this
   server, so the disk is never resolved. Resolving it would try to create the
   root and throw, which caused the production 500 on download. Seals stream
-  server-side from the hub's public `GHELPDESK_URL/storage/{file_path}`, and
+  server-side from the hub's public `GHELPDESK_URL/serve-storage/{file_path}`
+  route (its `/storage` symlink does not work on Azure and returns 404), and
   proofs are stored on this app's `public` disk under the same relative path.
   The hub's proof download falls back to `LINKPORTAL_URL/storage/{file_path}`
   when the file is not on its own disk.

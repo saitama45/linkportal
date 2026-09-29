@@ -17,7 +17,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  *  1. Shared filesystem (local dev, or a shared mount): the `npc` disk points at
  *     the hub's public storage and files are read and written there directly.
  *  2. Separate App Services: the `npc` root does not exist on this server.
- *     Seals stream from the hub's public `/storage/...` URL (GHELPDESK_URL), and
+ *     Seals stream from the hub's public `/serve-storage/...` route (GHELPDESK_URL), and
  *     proofs uploaded here stay on this app's `public` disk, which the hub
  *     fetches from LINKPORTAL_URL in turn. Both paths share one relative layout.
  */
@@ -105,7 +105,9 @@ class HubNpcStorage
             return null;
         }
 
-        $url = $baseUrl.'/storage/'.implode('/', array_map('rawurlencode', explode('/', $relative)));
+        // Not `/storage/...`: the hub's storage symlink does not work on its Azure
+        // share, so it serves the public disk through this route instead.
+        $url = $baseUrl.'/serve-storage/'.implode('/', array_map('rawurlencode', explode('/', $relative)));
 
         try {
             $response = Http::withOptions(['stream' => true])->timeout(60)->get($url);
