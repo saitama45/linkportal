@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Vendor;
 
 use App\Http\Controllers\Controller;
 use App\Http\Services\AuditLogger;
+use App\Http\Services\HubNpcStorage;
 use App\Models\NpcSealReceipt;
 use App\Models\NpcStatus;
 use App\Models\NpcStatusAttachment;
@@ -15,7 +16,6 @@ use App\Support\CashierContext;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Notification;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
 
@@ -93,12 +93,13 @@ class NpcStatusController extends Controller
             ->first();
     }
 
-    public function downloadStoreSeal(Request $request, NpcStatus $npcStatus, Store $store, string $type)
+    public function downloadStoreSeal(Request $request, NpcStatus $npcStatus, Store $store, string $type, HubNpcStorage $files)
     {
         $this->authorizeStore($npcStatus, $store, $type);
         $attachment = $this->attachment($npcStatus, $store, $type);
         abort_unless($attachment, 404, 'This seal is not available yet.');
-        $this->ensureFileExists($attachment->file_path);
+        // Resolved first: it 404s on a missing file, before any receipt exists.
+        $download = $files->download($attachment->file_path, $attachment->file_name);
 
         $receipt = DB::transaction(function () use ($npcStatus, $store, $type) {
             NpcStatus::whereKey($npcStatus->id)->lockForUpdate()->firstOrFail();
@@ -123,18 +124,18 @@ class NpcStatusController extends Controller
             ]);
         }
 
-        return Storage::disk('npc')->download($attachment->file_path, $attachment->file_name);
+        return $download;
     }
 
-    public function uploadStoreProof(Request $request, NpcStatus $npcStatus, Store $store, string $type)
+    public function uploadStoreProof(Request $request, NpcStatus $npcStatus, Store $store, string $type, HubNpcStorage $files)
     {
         $this->authorizeStore($npcStatus, $store, $type);
         abort_unless($this->attachment($npcStatus, $store, $type), 404, 'This seal is not available yet.');
         $request->validate(['file' => 'required|file|mimes:pdf,jpg,jpeg,png,webp,gif,bmp,heic,heif|max:1024000']);
 
         $file = $request->file('file');
-        $path = $file->storeAs("npc-store-proofs/{$npcStatus->id}/{$store->id}",
-            'proof-'.$type.'-'.Str::uuid().'.'.$file->extension(), 'npc');
+        $path = $files->storeProof($file, "npc-store-proofs/{$npcStatus->id}/{$store->id}",
+            'proof-'.$type.'-'.Str::uuid().'.'.$file->extension());
 
         try {
             $oldPath = DB::transaction(function () use ($npcStatus, $store, $type, $file, $path) {
@@ -144,7 +145,7 @@ class NpcStatusController extends Controller
                 ]);
                 $oldPath = $proof->file_path;
                 $proof->fill([
-                    'file_path' => str_replace('\\', '/', $path),
+                    'file_path' => $path,
                     'file_name' => $file->getClientOriginalName(),
                     'mime_type' => $file->getMimeType(),
                     'file_size' => $file->getSize(),
@@ -159,32 +160,24 @@ class NpcStatusController extends Controller
                 return $oldPath;
             });
         } catch (\Throwable $exception) {
-            Storage::disk('npc')->delete($path);
+            $files->delete($path);
             throw $exception;
         }
 
         // Keep the old proof until both the replacement and its record succeed.
-        if ($oldPath) {
-            Storage::disk('npc')->delete($oldPath);
-        }
+        $files->delete($oldPath);
 
         return $request->expectsJson()
             ? response()->json(['message' => 'Proof uploaded successfully'])
             : back()->with('success', 'Proof uploaded successfully');
     }
 
-    public function downloadStoreProof(NpcStatus $npcStatus, Store $store, string $type)
+    public function downloadStoreProof(NpcStatus $npcStatus, Store $store, string $type, HubNpcStorage $files)
     {
         $this->authorizeStore($npcStatus, $store, $type);
         $proof = $npcStatus->storeProofs()->where('store_id', $store->id)->where('seal_type', $type)->firstOrFail();
-        $this->ensureFileExists($proof->file_path);
 
-        return Storage::disk('npc')->download($proof->file_path, $proof->file_name);
-    }
-
-    private function ensureFileExists(?string $path): void
-    {
-        abort_unless($path && Storage::disk('npc')->exists($path), 404, 'The file is not available.');
+        return $files->download($proof->file_path, $proof->file_name);
     }
 
     private function notifyDownload(NpcStatus $status, Store $store, string $type): void

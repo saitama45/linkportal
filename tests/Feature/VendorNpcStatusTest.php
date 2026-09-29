@@ -14,6 +14,7 @@ use App\Notifications\ActivityNotification;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
@@ -39,7 +40,14 @@ class VendorNpcStatusTest extends TestCase
         $this->assertSame(':memory:', config('database.connections.sqlite.database'));
         $this->artisan('migrate', ['--path' => 'database/migrations/portal'])->assertSuccessful();
         $this->withoutVite();
+        // Shared-filesystem deployment by default; the hub-over-HTTP case
+        // overrides both settings. No test may reach a real hub.
         Storage::fake('npc');
+        config([
+            'filesystems.disks.npc.root' => Storage::disk('npc')->path(''),
+            'services.ghelpdesk.base_url' => null,
+        ]);
+        Http::preventStrayRequests();
         Notification::fake();
 
         // Minimal shared hub schema, created only in SQLite memory. Production
@@ -230,6 +238,41 @@ class VendorNpcStatusTest extends TestCase
         $this->get(route('vendor.npc-statuses.index'))->assertInertia(fn ($page) => $page
             ->where('storeSeals.0.years.0.seals.0.proof.name', 'replacement.pdf'));
         $this->assertDatabaseCount('npc_seal_receipts', 0);
+    }
+
+    public function test_separate_hub_server_streams_seals_over_http_and_keeps_proofs_on_the_portal(): void
+    {
+        // Production: the hub's storage directory is not on this server.
+        config([
+            'filesystems.disks.npc.root' => storage_path('framework/testing/missing-hub-'.uniqid()),
+            'services.ghelpdesk.base_url' => 'https://hub.test',
+        ]);
+        Storage::fake('public');
+        Http::fake([
+            'hub.test/storage/npc-statuses/2026/1/seal.pdf' => Http::response('%PDF-1.4 hub', 200, ['Content-Type' => 'application/pdf']),
+            'hub.test/*' => Http::response('', 404),
+        ]);
+        $attachment = $this->status->attachments()->create([
+            'type' => 'dpo_seal', 'validity_from' => '2026-01-01',
+            'file_path' => 'npc-statuses/2026/1/seal.pdf', 'file_name' => 'CORSeal.pdf',
+        ]);
+
+        $this->actingAs($this->cashier, 'vendor')->getJson($this->url('seal.download'))->assertOk();
+        $response = $this->get($this->url('seal.download'))->assertOk()->assertDownload('CORSeal.pdf');
+        $this->assertSame('%PDF-1.4 hub', $response->streamedContent());
+        $this->assertDatabaseCount('npc_seal_receipts', 1);
+
+        $attachment->update(['file_path' => 'npc-statuses/2026/1/gone.pdf']);
+        $this->getJson($this->url('seal.download'))->assertNotFound();
+
+        $this->postJson($this->url('proof.upload'), [
+            'file' => UploadedFile::fake()->create('proof.pdf', 10, 'application/pdf'),
+        ])->assertOk();
+        $proof = NpcStoreProof::first();
+        Storage::disk('public')->assertExists($proof->file_path);
+        Storage::disk('npc')->assertMissing($proof->file_path);
+        $this->get($this->url('proof.download'))->assertDownload('proof.pdf');
+        $this->assertFalse(is_dir(config('filesystems.disks.npc.root')));
     }
 
     public function test_invalid_upload_leaves_existing_proof_intact(): void

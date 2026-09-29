@@ -45,12 +45,19 @@ The portal uses the existing `npc_statuses`, `npc_status_store`,
 The hub owns their migrations; no duplicate production migrations or copied
 business records are needed.
 
-`filesystems.disks.npc` must point to the **same directory** as the hub's public
-disk. Locally it defaults to `../ghelpdesk/storage/app/public`. For a deployment
-with a different directory layout, set `NPC_SHARED_STORAGE_PATH` to the absolute
-path of that directory or shared volume, with read/write access for the portal.
-Both apps must use the same database and shared storage volume. A remote hub
-requires a shared mount; this module does not transfer files over its API.
+Files go through `App\Http\Services\HubNpcStorage`, which supports both
+deployments (it mirrors the hub's `PortalDocumentStorage`):
+
+- **Shared filesystem** (local dev, or a shared mount): `filesystems.disks.npc`
+  points at the hub's public disk, `../ghelpdesk/storage/app/public` by default
+  or `NPC_SHARED_STORAGE_PATH`. Seals are read and proofs written there.
+- **Separate App Services** (production): the `npc` root does not exist on this
+  server, so the disk is never resolved. Resolving it would try to create the
+  root and throw, which caused the production 500 on download. Seals stream
+  server-side from the hub's public `GHELPDESK_URL/storage/{file_path}`, and
+  proofs are stored on this app's `public` disk under the same relative path.
+  The hub's proof download falls back to `LINKPORTAL_URL/storage/{file_path}`
+  when the file is not on its own disk.
 
 Shared `downloaded_by` and `uploaded_by` columns refer to hub `users`, whereas
 cashiers are `vendors`. Portal actions leave those user IDs null and record the

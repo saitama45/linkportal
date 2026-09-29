@@ -158,6 +158,7 @@ const scanTokenInput = ref('');
 const scanTokenInputRef = ref(null);
 const scanPurchaseAmountInputRef = ref(null);
 const scanPurchaseAmount = ref(null);
+const scanReceiptNumber = ref('');
 const scanNote = ref('');
 const scanQuantity = ref(1);
 
@@ -192,6 +193,7 @@ const openScanModal = () => {
     Object.assign(scanModal, { open: true, step: 'scan', resolving: false, submitting: false, customer: null, cards: [], error: null });
     scanTokenInput.value = '';
     scanPurchaseAmount.value = null;
+    scanReceiptNumber.value = '';
     scanNote.value = '';
     scanQuantity.value = 1;
     // A hardware scanner types into whatever holds focus, so the token field
@@ -262,7 +264,7 @@ const scanQuantityError = computed(() => {
 });
 
 const submitScanAddStamp = async () => {
-    if (!scanProgramId.value || !scanPurchaseAmount.value || scanModal.submitting) return;
+    if (!scanProgramId.value || !scanPurchaseAmount.value || !scanReceiptNumber.value.trim() || scanModal.submitting) return;
     if (scanQuantityError.value) return;
     scanModal.submitting = true;
     scanModal.error = null;
@@ -272,6 +274,7 @@ const submitScanAddStamp = async () => {
             stamp_program_id: scanProgramId.value,
             quantity: scanQuantity.value,
             purchase_amount: scanPurchaseAmount.value,
+            receipt_number: scanReceiptNumber.value.trim(),
             note: scanNote.value || null,
         });
         // The server says how many actually fit, which can be fewer than asked.
@@ -294,6 +297,7 @@ const rescan = () => {
     // scanProgramId stays: several members in a row for one running campaign.
     scanTokenInput.value = '';
     scanPurchaseAmount.value = null;
+    scanReceiptNumber.value = '';
     scanNote.value = '';
     scanQuantity.value = 1;
     nextTick(() => scanTokenInputRef.value?.focus());
@@ -1010,6 +1014,11 @@ const submitRedeem = () => {
                     </div>
 
                     <div>
+                        <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Receipt No. <span class="text-rose-500">*</span></label>
+                        <input v-model="scanReceiptNumber" type="text" maxlength="100" class="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2 text-sm font-bold text-slate-900 outline-none focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-100" />
+                    </div>
+
+                    <div>
                         <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Note</label>
                         <input v-model="scanNote" type="text" maxlength="255" class="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2 text-xs font-medium text-slate-900 outline-none focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-100" />
                     </div>
@@ -1023,7 +1032,7 @@ const submitRedeem = () => {
                             <button type="button" class="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50" @click="closeScanModal">Cancel</button>
                             <button
                                 type="button"
-                                :disabled="scanModal.submitting || !!scanQuantityError || !scanProgramId || !scanPurchaseAmount"
+                                :disabled="scanModal.submitting || !!scanQuantityError || !scanProgramId || !scanPurchaseAmount || !scanReceiptNumber.trim()"
                                 class="rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-xs font-black uppercase tracking-wider text-white shadow-md shadow-emerald-600/20 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50"
                                 @click="submitScanAddStamp"
                             >
@@ -1140,6 +1149,7 @@ const submitRedeem = () => {
                                 <th class="px-3.5 py-2.5">Qty</th>
                                 <th class="px-3.5 py-2.5">Source</th>
                                 <th class="px-3.5 py-2.5">Amount</th>
+                                <th class="px-3.5 py-2.5">Receipt No.</th>
                                 <th class="px-3.5 py-2.5">Store</th>
                                 <th class="px-3.5 py-2.5">By</th>
                                 <th class="px-3.5 py-2.5">Note</th>
@@ -1151,12 +1161,13 @@ const submitRedeem = () => {
                                 <td class="px-3.5 py-2.5 font-black text-slate-900">{{ entry.quantity }}</td>
                                 <td class="px-3.5 py-2.5 capitalize font-semibold text-slate-800">{{ entry.source }}</td>
                                 <td class="px-3.5 py-2.5 font-bold text-slate-900">₱{{ formatAmount(entry.purchase_amount) }}</td>
+                                <td class="px-3.5 py-2.5 font-medium text-slate-700">{{ entry.receipt_number || '—' }}</td>
                                 <td class="px-3.5 py-2.5 font-medium text-slate-700">{{ entry.store?.code || '—' }}</td>
                                 <td class="px-3.5 py-2.5 text-slate-600">{{ actorName(entry) }}</td>
                                 <td class="px-3.5 py-2.5 text-slate-500">{{ entry.note || '—' }}</td>
                             </tr>
                             <tr v-if="!entriesModal.entries.length">
-                                <td colspan="7" class="px-4 py-8 text-center text-xs font-medium text-slate-400">No stamps recorded yet.</td>
+                                <td colspan="8" class="px-4 py-8 text-center text-xs font-medium text-slate-400">No stamps recorded yet.</td>
                             </tr>
                         </tbody>
                     </table>

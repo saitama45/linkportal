@@ -12,7 +12,7 @@ use Illuminate\Database\Eloquent\Model;
 class StampEntry extends Model
 {
     protected $fillable = [
-        'stamp_card_id', 'store_id', 'quantity', 'source', 'purchase_amount', 'note',
+        'stamp_card_id', 'store_id', 'quantity', 'source', 'purchase_amount', 'receipt_number', 'note',
         'created_by', 'cashier_vendor_id',
     ];
 

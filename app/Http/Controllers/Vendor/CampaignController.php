@@ -174,6 +174,7 @@ class CampaignController extends Controller
             'stamp_program_id' => 'required|exists:stamp_programs,id',
             'quantity' => 'nullable|integer|min:1|max:1000',
             'purchase_amount' => 'required|numeric|min:0.01',
+            'receipt_number' => 'required|string|max:100',
             'note' => 'nullable|string|max:255',
         ]);
 
@@ -220,6 +221,7 @@ class CampaignController extends Controller
                 'scan',
                 $data['purchase_amount'],
                 $data['note'] ?? null,
+                trim($data['receipt_number']),
             );
 
             return $card->fresh(['customer:id,name', 'program:id,name,stamps_required']);
@@ -298,7 +300,7 @@ class CampaignController extends Controller
      * and return how many stamps actually fit — which can be fewer than were
      * asked for. Mirrors the hub's StampController::applyStamps.
      */
-    private function applyStamps(StampCard $card, int $quantity, string $source, $purchaseAmount, ?string $note): int
+    private function applyStamps(StampCard $card, int $quantity, string $source, $purchaseAmount, ?string $note, ?string $receiptNumber = null): int
     {
         if ($card->status !== 'active') {
             throw ValidationException::withMessages(['quantity' => 'Stamps can only be added to an active card.']);
@@ -320,13 +322,14 @@ class CampaignController extends Controller
         $storeId = CashierContext::storeId();
         $vendorId = CashierContext::vendor()->id;
 
-        DB::transaction(function () use ($card, $applied, $source, $purchaseAmount, $note, $storeId, $vendorId, $required) {
+        DB::transaction(function () use ($card, $applied, $source, $purchaseAmount, $note, $receiptNumber, $storeId, $vendorId, $required) {
             StampEntry::create([
                 'stamp_card_id' => $card->id,
                 'store_id' => $storeId,
                 'quantity' => $applied,
                 'source' => $source,
                 'purchase_amount' => $purchaseAmount,
+                'receipt_number' => $receiptNumber,
                 'note' => $note,
                 'cashier_vendor_id' => $vendorId,
             ]);
