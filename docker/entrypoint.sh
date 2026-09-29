@@ -10,7 +10,9 @@ cd "$APP_HOME"
 # (WEBSITES_ENABLE_APP_SERVICE_STORAGE=true), so NO extra storage resource is
 # needed. Only storage/app is redirected; framework caches stay local (fast).
 PERSIST_DIR="/home/site/linkportal/storage-app"
-if mkdir -p "$PERSIST_DIR/private" 2>/dev/null; then
+# `public` is the target of the public/storage link (the `public` disk): without
+# it the link dangles and every write to that disk fails (NPC proofs, vendor docs).
+if mkdir -p "$PERSIST_DIR/private" "$PERSIST_DIR/public" 2>/dev/null; then
   [ -L "$APP_HOME/storage/app" ] || rm -rf "$APP_HOME/storage/app"
   ln -sfn "$PERSIST_DIR" "$APP_HOME/storage/app"
   echo "[entrypoint] storage/app -> $PERSIST_DIR (persistent /home share)"
@@ -25,6 +27,7 @@ mkdir -p \
   storage/framework/views \
   storage/logs \
   storage/app/private \
+  storage/app/public \
   bootstrap/cache
 
 # storage/app may be a mounted (persistent) volume — make sure it's writable.

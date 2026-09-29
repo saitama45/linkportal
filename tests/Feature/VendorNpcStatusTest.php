@@ -242,12 +242,16 @@ class VendorNpcStatusTest extends TestCase
 
     public function test_separate_hub_server_streams_seals_over_http_and_keeps_proofs_on_the_portal(): void
     {
-        // Production: the hub's storage directory is not on this server.
+        // Production: neither the hub's directory nor this app's public storage
+        // can be created here, and neither disk is faked, so resolving either
+        // one throws, which was the 500 on download.
+        $blocker = tempnam(sys_get_temp_dir(), 'npc');
         config([
-            'filesystems.disks.npc.root' => storage_path('framework/testing/missing-hub-'.uniqid()),
+            'filesystems.disks.npc.root' => $blocker.'/hub',
+            'filesystems.disks.public.root' => $blocker.'/public',
             'services.ghelpdesk.base_url' => 'https://hub.test',
         ]);
-        Storage::fake('public');
+        Storage::forgetDisk(['npc', 'public']);
         Http::fake([
             'hub.test/storage/npc-statuses/2026/1/seal.pdf' => Http::response('%PDF-1.4 hub', 200, ['Content-Type' => 'application/pdf']),
             'hub.test/*' => Http::response('', 404),
@@ -265,14 +269,17 @@ class VendorNpcStatusTest extends TestCase
         $attachment->update(['file_path' => 'npc-statuses/2026/1/gone.pdf']);
         $this->getJson($this->url('seal.download'))->assertNotFound();
 
+        // Proofs need this app's public storage, which the entrypoint creates.
+        Storage::fake('public');
+        config(['filesystems.disks.public.root' => Storage::disk('public')->path('')]);
         $this->postJson($this->url('proof.upload'), [
             'file' => UploadedFile::fake()->create('proof.pdf', 10, 'application/pdf'),
         ])->assertOk();
         $proof = NpcStoreProof::first();
         Storage::disk('public')->assertExists($proof->file_path);
-        Storage::disk('npc')->assertMissing($proof->file_path);
         $this->get($this->url('proof.download'))->assertDownload('proof.pdf');
         $this->assertFalse(is_dir(config('filesystems.disks.npc.root')));
+        unlink($blocker);
     }
 
     public function test_invalid_upload_leaves_existing_proof_intact(): void

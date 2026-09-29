@@ -23,16 +23,9 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  */
 class HubNpcStorage
 {
-    /**
-     * Checked from config rather than by resolving the disk: a local disk
-     * creates its root on construction, which throws when the hub's directory
-     * is not on this server (a 500 on every NPC file action).
-     */
     public function sharedDiskAvailable(): bool
     {
-        $root = config('filesystems.disks.npc.root');
-
-        return is_string($root) && $root !== '' && is_dir($root);
+        return $this->diskExists('npc');
     }
 
     /**
@@ -87,7 +80,20 @@ class HubNpcStorage
 
     private function localDisks(): array
     {
-        return $this->sharedDiskAvailable() ? ['npc', 'public'] : ['public'];
+        return array_values(array_filter(['npc', 'public'], fn (string $disk) => $this->diskExists($disk)));
+    }
+
+    /**
+     * Checked from config rather than by resolving the disk: a local disk
+     * creates its root on construction and throws when it cannot. That covers
+     * the hub's directory on another server, or `public/storage` linked to a
+     * directory that does not exist, and either one is a 500 on every NPC file action.
+     */
+    private function diskExists(string $disk): bool
+    {
+        $root = config("filesystems.disks.{$disk}.root");
+
+        return is_string($root) && $root !== '' && is_dir($root);
     }
 
     /** A streamed GET of the hub's public storage URL, or null when unavailable. */
