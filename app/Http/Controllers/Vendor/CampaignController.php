@@ -13,6 +13,7 @@ use App\Models\StampProgram;
 use App\Models\StampRedemption;
 use App\Models\StampRedemptionUnit;
 use App\Models\StockIn;
+use App\Models\Store;
 use App\Models\Voucher;
 use App\Models\VoucherBatch;
 use App\Models\VoucherRedemption;
@@ -241,10 +242,18 @@ class CampaignController extends Controller
         $data = $request->validate([
             'quantity' => 'required|integer|min:1|max:1000',
             'purchase_amount' => 'required|numeric|min:0.01',
+            'receipt_number' => 'required|string|max:100',
             'note' => 'nullable|string|max:255',
         ]);
 
-        $this->applyStamps($card, $data['quantity'], 'manual', $data['purchase_amount'], $data['note'] ?? null);
+        $this->applyStamps(
+            $card,
+            $data['quantity'],
+            'manual',
+            $data['purchase_amount'],
+            $data['note'] ?? null,
+            trim($data['receipt_number']),
+        );
 
         return back()->with('success', 'Stamps added.');
     }
@@ -255,6 +264,7 @@ class CampaignController extends Controller
 
         $data = $request->validate([
             'purchase_amount' => 'required|numeric|min:0.01',
+            'receipt_number' => 'required|string|max:100',
             'note' => 'nullable|string|max:255',
         ]);
 
@@ -277,7 +287,14 @@ class CampaignController extends Controller
             ]);
         }
 
-        $this->applyStamps($card, $earned, 'purchase', $data['purchase_amount'], $data['note'] ?? null);
+        $this->applyStamps(
+            $card,
+            $earned,
+            'purchase',
+            $data['purchase_amount'],
+            $data['note'] ?? null,
+            trim($data['receipt_number']),
+        );
 
         return back()->with('success', "Recorded purchase — {$earned} stamp(s) earned.");
     }
@@ -300,7 +317,7 @@ class CampaignController extends Controller
      * and return how many stamps actually fit — which can be fewer than were
      * asked for. Mirrors the hub's StampController::applyStamps.
      */
-    private function applyStamps(StampCard $card, int $quantity, string $source, $purchaseAmount, ?string $note, ?string $receiptNumber = null): int
+    private function applyStamps(StampCard $card, int $quantity, string $source, $purchaseAmount, ?string $note, string $receiptNumber): int
     {
         if ($card->status !== 'active') {
             throw ValidationException::withMessages(['quantity' => 'Stamps can only be added to an active card.']);
@@ -323,6 +340,8 @@ class CampaignController extends Controller
         $vendorId = CashierContext::vendor()->id;
 
         DB::transaction(function () use ($card, $applied, $source, $purchaseAmount, $note, $receiptNumber, $storeId, $vendorId, $required) {
+            $this->assertReceiptUnusedAtStore($storeId, $receiptNumber);
+
             StampEntry::create([
                 'stamp_card_id' => $card->id,
                 'store_id' => $storeId,
@@ -347,6 +366,33 @@ class CampaignController extends Controller
         });
 
         return $applied;
+    }
+
+    /**
+     * A POS receipt earns stamps once per store. Scoped to the store rather
+     * than global on purpose: every outlet runs its own receipt series, so two
+     * branches legitimately issue the same number.
+     *
+     * Enforced here and not by a unique index: the hub owns `stamp_entries`,
+     * and its own manual stamping records no receipt at all.
+     */
+    private function assertReceiptUnusedAtStore(int $storeId, string $receiptNumber): void
+    {
+        // Holding the store row serialises stamping at this store, so two
+        // requests carrying the same receipt cannot both pass the check below.
+        Store::query()->whereKey($storeId)->lockForUpdate()->first();
+
+        // Case-folded so "or-1001" and "OR-1001" are one receipt on every
+        // driver, the same way the voucher sale key treats them.
+        $used = StampEntry::where('store_id', $storeId)
+            ->whereRaw('UPPER(receipt_number) = ?', [mb_strtoupper($receiptNumber)])
+            ->exists();
+
+        if ($used) {
+            throw ValidationException::withMessages([
+                'receipt_number' => "Receipt no. {$receiptNumber} has already been used for stamps at this store.",
+            ]);
+        }
     }
 
     /* ----------------------------------------------------------------------

@@ -307,7 +307,7 @@ const rescan = () => {
  | Add stamps / record purchase / stamp history
  * ------------------------------------------------------------------ */
 const stampModal = reactive({ open: false, card: null });
-const stampForm = useForm({ quantity: 1, purchase_amount: null, note: '' });
+const stampForm = useForm({ quantity: 1, purchase_amount: null, receipt_number: '', note: '' });
 const stampRemaining = computed(() => {
     const card = stampModal.card;
     if (!card?.program) return 0;
@@ -328,7 +328,7 @@ const submitStamp = () => {
 };
 
 const purchaseModal = reactive({ open: false, card: null });
-const purchaseForm = useForm({ purchase_amount: null, note: '' });
+const purchaseForm = useForm({ purchase_amount: null, receipt_number: '', note: '' });
 const purchaseProgram = computed(() => purchaseModal.card?.program || null);
 const openPurchaseModal = (card) => {
     purchaseForm.clearErrors();
@@ -1093,6 +1093,11 @@ const submitRedeem = () => {
                     </div>
                 </div>
                 <div>
+                    <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Receipt No. <span class="text-rose-500">*</span></label>
+                    <input v-model="stampForm.receipt_number" type="text" maxlength="100" class="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2 text-sm font-bold text-slate-900 outline-none focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-100" />
+                    <p v-if="stampForm.errors.receipt_number" class="mt-1 text-xs font-bold text-rose-600">{{ stampForm.errors.receipt_number }}</p>
+                </div>
+                <div>
                     <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Note</label>
                     <input v-model="stampForm.note" type="text" maxlength="255" class="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2 text-xs font-medium text-slate-900 outline-none focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-100" />
                 </div>
@@ -1118,6 +1123,11 @@ const submitRedeem = () => {
                     <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Purchase amount <span class="text-rose-500">*</span></label>
                     <input v-model.number="purchaseForm.purchase_amount" type="number" min="0.01" step="0.01" class="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2 text-sm font-bold text-slate-900 outline-none focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-100" />
                     <p v-if="purchaseForm.errors.purchase_amount" class="mt-1 text-xs font-bold text-rose-600">{{ purchaseForm.errors.purchase_amount }}</p>
+                </div>
+                <div>
+                    <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Receipt No. <span class="text-rose-500">*</span></label>
+                    <input v-model="purchaseForm.receipt_number" type="text" maxlength="100" class="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2 text-sm font-bold text-slate-900 outline-none focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-100" />
+                    <p v-if="purchaseForm.errors.receipt_number" class="mt-1 text-xs font-bold text-rose-600">{{ purchaseForm.errors.receipt_number }}</p>
                 </div>
                 <div>
                     <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Note</label>
