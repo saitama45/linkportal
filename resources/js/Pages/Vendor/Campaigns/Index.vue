@@ -960,7 +960,10 @@ const submitRedeem = () => {
         </div>
 
         <!-- Scan Customer QR Modal -->
-        <Modal :show="scanModal.open" max-width="lg" @close="closeScanModal">
+        <!-- Every modal on this page is :closeable="false": a stray click on the
+             backdrop at a busy till must not throw away a half-entered sale, so
+             each one closes only through its own Cancel / Close button. -->
+        <Modal :show="scanModal.open" max-width="lg" :closeable="false" @close="closeScanModal">
             <div class="space-y-5 p-6 sm:p-7">
                 <div class="border-b border-slate-100 pb-3">
                     <h3 class="text-lg font-black tracking-tight text-slate-900">Scan Customer QR</h3>
@@ -1045,7 +1048,7 @@ const submitRedeem = () => {
         </Modal>
 
         <!-- Scan Redeem QR Modal -->
-        <Modal :show="redeemScanModal.open" max-width="lg" @close="redeemScanModal.open = false">
+        <Modal :show="redeemScanModal.open" max-width="lg" :closeable="false" @close="redeemScanModal.open = false">
             <div class="space-y-4 p-6 sm:p-7">
                 <div class="border-b border-slate-100 pb-3">
                     <h3 class="text-lg font-black tracking-tight text-slate-900">Scan Redeem QR</h3>
@@ -1071,7 +1074,7 @@ const submitRedeem = () => {
         </Modal>
 
         <!-- Add Stamps Modal -->
-        <Modal :show="stampModal.open" max-width="lg" @close="stampModal.open = false">
+        <Modal :show="stampModal.open" max-width="lg" :closeable="false" @close="stampModal.open = false">
             <div class="space-y-4 p-6 sm:p-7">
                 <div class="border-b border-slate-100 pb-3">
                     <h3 class="text-lg font-black tracking-tight text-slate-900">Add Stamps</h3>
@@ -1111,7 +1114,7 @@ const submitRedeem = () => {
         </Modal>
 
         <!-- Record Purchase Modal -->
-        <Modal :show="purchaseModal.open" max-width="lg" @close="purchaseModal.open = false">
+        <Modal :show="purchaseModal.open" max-width="lg" :closeable="false" @close="purchaseModal.open = false">
             <div class="space-y-4 p-6 sm:p-7">
                 <div class="border-b border-slate-100 pb-3">
                     <h3 class="text-lg font-black tracking-tight text-slate-900">Record Purchase</h3>
@@ -1143,7 +1146,7 @@ const submitRedeem = () => {
         </Modal>
 
         <!-- Stamp History Modal -->
-        <Modal :show="entriesModal.open" max-width="2xl" @close="entriesModal.open = false">
+        <Modal :show="entriesModal.open" max-width="2xl" :closeable="false" @close="entriesModal.open = false">
             <div class="p-6 sm:p-7">
                 <div class="border-b border-slate-100 pb-3">
                     <h3 class="text-lg font-black tracking-tight text-slate-900">Stamp History</h3>
@@ -1190,7 +1193,7 @@ const submitRedeem = () => {
         </Modal>
 
         <!-- Redeem Reward Modal -->
-        <Modal :show="redeemModal.open" max-width="2xl" @close="redeemModal.open = false">
+        <Modal :show="redeemModal.open" max-width="2xl" :closeable="false" @close="redeemModal.open = false">
             <div class="space-y-4 p-6 sm:p-7">
                 <div class="border-b border-slate-100 pb-3">
                     <h3 class="text-lg font-black tracking-tight text-slate-900">Redeem Reward</h3>

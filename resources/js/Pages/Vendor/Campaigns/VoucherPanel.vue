@@ -282,7 +282,9 @@ const cashierName = (row) => row.cashier?.name || row.cashier_vendor?.name || 'â
         </div>
 
         <!-- Verify / Use Voucher Modal -->
-        <Modal :show="scan.open" max-width="2xl" @close="scan.open = false">
+        <!-- :closeable="false" like every Campaigns modal â€” it closes only
+             through the Close button at the foot, never a stray backdrop click. -->
+        <Modal :show="scan.open" max-width="2xl" :closeable="false" @close="scan.open = false">
             <div class="p-6 sm:p-7">
                 <div class="flex items-center justify-between border-b border-slate-100 pb-4">
                     <div>
@@ -394,6 +396,10 @@ const cashierName = (row) => row.cashier?.name || row.cashier_vendor?.name || 'â
                     >
                         {{ redeeming ? 'Applying voucherâ€¦' : 'Apply as Payment and Mark Used' }}
                     </button>
+                </div>
+
+                <div class="mt-5 flex justify-end">
+                    <button type="button" class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50" @click="scan.open = false">Close</button>
                 </div>
             </div>
         </Modal>
