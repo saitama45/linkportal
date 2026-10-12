@@ -732,7 +732,7 @@ const submitRedeem = () => {
             <CampaignTable
                 v-if="currentTab === 'cards'"
                 title="Stamp Cards"
-                subtitle="Cards issued at this store."
+                subtitle="Cards issued or stamped at this store."
                 search-placeholder="Search customer, program, status..."
                 empty-message="Scan a member's QR to start their first card."
                 :data="cardTable.data"
@@ -771,7 +771,11 @@ const submitRedeem = () => {
                     <tr v-for="card in data" :key="card.id" class="transition-colors hover:bg-slate-50/60">
                         <td class="px-6 py-4 text-sm font-bold text-slate-900">{{ card.customer?.name || '—' }}</td>
                         <td class="px-6 py-4 text-sm font-medium text-slate-700">{{ card.program?.name || '—' }}</td>
-                        <td class="whitespace-nowrap px-6 py-4 text-xs font-medium text-slate-500">{{ formatDateTime(card.created_at) }}</td>
+                        <td class="whitespace-nowrap px-6 py-4 text-xs font-medium text-slate-500">
+                            {{ formatDateTime(card.created_at) }}
+                            <!-- A card opened at another branch and stamped here: say so, or the row looks misfiled. -->
+                            <span v-if="card.store_id !== store.id" class="block text-[11px] font-semibold text-slate-400">at {{ card.store?.code || 'another store' }}</span>
+                        </td>
                         <td class="px-6 py-4 text-sm">
                             <button type="button" class="group flex items-center gap-2.5" title="View stamp history" @click="openEntriesModal(card)">
                                 <div class="h-2.5 w-28 overflow-hidden rounded-full bg-slate-100 border border-slate-200/60">
@@ -807,7 +811,7 @@ const submitRedeem = () => {
             <CampaignTable
                 v-if="currentTab === 'redemptions'"
                 title="Redemptions"
-                subtitle="Rewards released from this store."
+                subtitle="Rewards released from this store, or claimed on its cards."
                 search-placeholder="Search customer, program, item, location..."
                 empty-message="No rewards have been redeemed here yet."
                 :data="redeemTable.data"

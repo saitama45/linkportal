@@ -62,9 +62,12 @@ class CampaignController extends Controller
                 'program:id,name,stamps_required,auto_stamp_amount',
                 'store:id,code,name',
             ])
-                ->where('store_id', $storeId)
+                ->where($this->cardsOfStore($storeId))
                 ->orderByDesc('id')
                 ->get(),
+            // Rewards that left this store's shelf, plus the ones claimed on
+            // its cards elsewhere. `location` is the releasing store, and it is
+            // not always the card's own: a reward QR is honoured at any branch.
             'redemptions' => StampRedemption::with([
                 'customer:id,name',
                 'program:id,name',
@@ -79,15 +82,27 @@ class CampaignController extends Controller
                         ->selectRaw('COALESCE(SUM(purchase_amount), 0)')
                         ->whereColumn('stamp_entries.stamp_card_id', 'stamp_redemptions.stamp_card_id'),
                 ])
-                ->whereHas('card', fn ($q) => $q->where('store_id', $storeId))
+                ->where(fn ($q) => $q
+                    ->whereIn('stamp_redemptions.location', $this->locationVariants($store->code))
+                    ->orWhereHas('card', fn ($card) => $card->where($this->cardsOfStore($storeId))))
                 ->orderByDesc('id')
                 ->get(),
             'summary' => [
                 'customers' => Customer::count(),
-                'active_cards' => StampCard::where('store_id', $storeId)->where('status', 'active')->count(),
-                'completed_cards' => StampCard::where('store_id', $storeId)->where('status', 'completed')->count(),
-                'redeemed_cards' => StampCard::where('store_id', $storeId)->where('status', 'redeemed')->count(),
-                'total_amount' => StampEntry::whereHas('card', fn ($q) => $q->where('store_id', $storeId))->sum('purchase_amount'),
+                // Counted over the same cards the table lists, so the stat and
+                // the rows can never disagree.
+                'active_cards' => StampCard::where($this->cardsOfStore($storeId))->where('status', 'active')->count(),
+                'completed_cards' => StampCard::where($this->cardsOfStore($storeId))->where('status', 'completed')->count(),
+                'redeemed_cards' => StampCard::where($this->cardsOfStore($storeId))->where('status', 'redeemed')->count(),
+                // Sales rung up at this till, by the entry's own store — the way
+                // the hub totals them. A storeless entry (older hub stamping)
+                // falls back to the store that issued its card.
+                'total_amount' => StampEntry::where(fn ($q) => $q
+                    ->where('stamp_entries.store_id', $storeId)
+                    ->orWhere(fn ($legacy) => $legacy
+                        ->whereNull('stamp_entries.store_id')
+                        ->whereHas('card', fn ($card) => $card->where('stamp_cards.store_id', $storeId))))
+                    ->sum('purchase_amount'),
             ],
             ...$this->voucherProps($companyId),
         ]);
@@ -611,7 +626,34 @@ class CampaignController extends Controller
 
     private function assertCardInScope(StampCard $card): void
     {
-        abort_unless((int) $card->store_id === CashierContext::storeId(), 404);
+        // The same rule as the list, so every row the cashier can see is a row
+        // they can open and stamp — and nothing outside it is reachable by id.
+        abort_unless(
+            StampCard::whereKey($card->id)->where($this->cardsOfStore(CashierContext::storeId()))->exists(),
+            404,
+        );
+    }
+
+    /**
+     * The cards this store has a stake in: the ones it issued, and the ones it
+     * has stamped.
+     *
+     * The issuing store alone is not the boundary. A scan reuses the member's
+     * active card wherever it was first opened — a loyalty card follows the
+     * customer, not the branch — so a card started at another branch and then
+     * stamped here belongs on this till's list too. Filtering on
+     * `stamp_cards.store_id` only made that sale vanish from the store that
+     * had just taken it, while the member's app still showed it there.
+     *
+     * Returned as a constraint so the list, the counters and the scope guard
+     * all apply one definition; always pass it to `where()`, which keeps the
+     * OR inside its own group.
+     */
+    private function cardsOfStore(int $storeId): \Closure
+    {
+        return fn ($query) => $query
+            ->where('stamp_cards.store_id', $storeId)
+            ->orWhereHas('entries', fn ($entries) => $entries->where('stamp_entries.store_id', $storeId));
     }
 
     private function assertProgramInScope(int $programId): void
