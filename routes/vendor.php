@@ -3,6 +3,7 @@
 use App\Http\Controllers\Vendor\Auth\AuthController;
 use App\Http\Controllers\Vendor\BankAccountController;
 use App\Http\Controllers\Vendor\CampaignController;
+use App\Http\Controllers\Vendor\CampaignReceivingController;
 use App\Http\Controllers\Vendor\CampaignVoucherController;
 use App\Http\Controllers\Vendor\DashboardController;
 use App\Http\Controllers\Vendor\DocumentController;
@@ -108,6 +109,10 @@ Route::prefix('vendor')->name('vendor.')->group(function () {
 
                 Route::post('vouchers/verify', [CampaignVoucherController::class, 'verify'])->name('vouchers.verify');
                 Route::post('vouchers/redeem', [CampaignVoucherController::class, 'redeem'])->name('vouchers.redeem');
+
+                Route::get('receivings/{receiving}', [CampaignReceivingController::class, 'show'])->name('receivings.show');
+                Route::post('receivings/{receiving}/receive', [CampaignReceivingController::class, 'receive'])->name('receivings.receive');
+                Route::post('outgoing/resolve', [CampaignReceivingController::class, 'resolveOutgoing'])->name('outgoing.resolve');
             });
 
             // Invoice/PO intake — trading accounts only, same reason as above.

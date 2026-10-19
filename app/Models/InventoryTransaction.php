@@ -74,6 +74,12 @@ class InventoryTransaction extends Model
                 })->orWhere(function ($query) use ($table) {
                     $query->where("{$table}.reference_type", StampRedemption::class)
                         ->where("{$table}.transaction_type", 'Stamp Redemption');
+                })->orWhere(function ($query) use ($table) {
+                    // A line reported unserved, and one written off as lost in
+                    // transit: quantity 0, so they are history only and always
+                    // count. They are what puts those events on the trail.
+                    $query->where("{$table}.reference_type", StockReceiving::class)
+                        ->whereIn("{$table}.transaction_type", ['Receiving Unserved', 'Unserved Written Off']);
                 });
             });
     }

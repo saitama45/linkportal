@@ -13,10 +13,12 @@ use App\Models\StampProgram;
 use App\Models\StampRedemption;
 use App\Models\StampRedemptionUnit;
 use App\Models\StockIn;
+use App\Models\StockReceiving;
 use App\Models\Store;
 use App\Models\Voucher;
 use App\Models\VoucherBatch;
 use App\Models\VoucherRedemption;
+use App\Services\CampaignReceivingService;
 use App\Services\LoyaltyQrService;
 use App\Services\LoyaltyRedeemQrService;
 use App\Support\CashierContext;
@@ -35,16 +37,22 @@ use Inertia\Inertia;
  * in the hub; the portal only earns and spends against them. Cards can be
  * stamped and redeemed but never created from scratch — a card comes into
  * existence by scanning a member, which is the counter's actual workflow.
+ *
+ * A sixth tab, Receive, is the store's side of the hub's Receiving Stock: the
+ * reward stock a transfer delivers here is confirmed by
+ * CampaignReceivingController before any of it can be redeemed.
  */
 class CampaignController extends Controller
 {
     use LocatesInventoryUnits;
 
-    public function index()
+    public function index(CampaignReceivingService $receiving)
     {
         $store = CashierContext::store();
         $storeId = (int) $store->id;
         $companyId = CashierContext::companyId();
+        $storeVariants = $this->locationVariants($store->code);
+        $receivings = $receiving->receivingsAt($storeVariants);
 
         return Inertia::render('Vendor/Campaigns/Index', [
             'store' => $store->only(['id', 'code', 'name']),
@@ -105,6 +113,9 @@ class CampaignController extends Controller
                     ->sum('purchase_amount'),
             ],
             ...$this->voucherProps($companyId),
+            'receivings' => $receivings,
+            'receivingSummary' => $receiving->summarize($receivings),
+            'outgoingInTransit' => $receiving->outgoingInTransit($storeVariants),
         ]);
     }
 
@@ -607,6 +618,20 @@ class CampaignController extends Controller
 
     private function redeemableUnitsAt(Asset $asset, array $locationVariants, int $soh)
     {
+        // Pieces this store received as Damaged are not a reward to hand a
+        // member. (One that never arrived is already off every shelf — see
+        // fixedUnitsCurrentlyAt.) Keyed by the transfer that brought each piece
+        // here, so a piece later moved on and received good elsewhere is not
+        // held against it.
+        $offShelf = StockReceiving::query()
+            ->where('asset_id', $asset->id)
+            ->whereIn('destination_location', $locationVariants)
+            ->where('status', CampaignReceivingService::RECEIVED)
+            ->whereNotNull('stock_transfer_id')
+            ->where(fn ($q) => $q->where('received_quantity', '<', 1)->orWhere('condition', '<>', 'Good'))
+            ->pluck('stock_transfer_id')
+            ->flip();
+
         return $this->fixedUnitsCurrentlyAt($locationVariants, function ($query) use ($asset) {
             $query->where('stock_ins.asset_id', $asset->id)
                 ->whereNotIn('stock_ins.id', StampRedemptionUnit::query()->select('stock_in_id'));
@@ -614,6 +639,11 @@ class CampaignController extends Controller
             ->reject(fn (StockIn $unit) => $unit->sourceStockTransfers->contains(
                 fn ($transfer) => in_array($transfer->status, ['For Posting', 'Posted'], true)
             ))
+            ->reject(function (StockIn $unit) use ($offShelf) {
+                $broughtBy = $unit->sourceStockTransfers->firstWhere('status', 'Received')?->id;
+
+                return $broughtBy !== null && $offShelf->has($broughtBy);
+            })
             ->filter(fn (StockIn $unit) => filled($unit->barcode) || filled($unit->qrcode))
             ->take(max(0, $soh))
             ->values();

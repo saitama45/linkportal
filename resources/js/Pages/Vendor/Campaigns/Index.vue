@@ -2,7 +2,8 @@
 /**
  * Campaigns — the portal's counterpart to the LINK HUB's Loyalty Stamps page.
  *
- * Same five tabs and the same rules, with three deliberate differences:
+ * Same five tabs and the same rules (plus Receive, the store's side of the
+ * hub's Receiving Stock — see ReceivePanel), with three deliberate differences:
  *   * everything is scoped to the one store bound to this cashier account, so
  *     there is no store picker anywhere — the till IS the location;
  *   * Customers, Programs and Vouchers are read-only (they are configured in
@@ -18,8 +19,10 @@ import Modal from '@/Components/Modal.vue';
 import Autocomplete from '@/Components/Autocomplete.vue';
 import CampaignTable from '@/Components/Campaigns/CampaignTable.vue';
 import VoucherPanel from './VoucherPanel.vue';
+import ReceivePanel from './ReceivePanel.vue';
 import { QrCodeIcon } from '@heroicons/vue/24/outline';
 import { useToast } from '@/Composables/useToast.js';
+import { useClientTable } from '@/Composables/useClientTable.js';
 
 const props = defineProps({
     store: { type: Object, default: () => ({}) },
@@ -31,52 +34,27 @@ const props = defineProps({
     voucherBatches: { type: Array, default: () => [] },
     voucherRedemptions: { type: Array, default: () => [] },
     voucherSummary: { type: Object, default: () => ({}) },
+    receivings: { type: Array, default: () => [] },
+    receivingSummary: { type: Object, default: () => ({}) },
+    outgoingInTransit: { type: Array, default: () => [] },
 });
 
 const { addToast } = useToast();
 
 const currentTab = ref('cards');
-const tabList = [
+// Receive carries a count of what is waiting on this store — deliveries to
+// count, and unserved items it sent that it must settle — so either is
+// noticed without opening the tab.
+const outgoingReceivingCount = computed(() => new Set(props.outgoingInTransit
+    .map((line) => `${line.receiving_no}|${line.receiving_date}|${line.destination_location}`)).size);
+const tabList = computed(() => [
     { id: 'cards', label: 'Cards' },
     { id: 'redemptions', label: 'Redemptions' },
     { id: 'customers', label: 'Customers' },
     { id: 'programs', label: 'Programs' },
     { id: 'vouchers', label: 'Vouchers' },
-];
-
-/* ------------------------------------------------------------------ *
- | Lightweight client-side table (search + pagination)
- * ------------------------------------------------------------------ */
-const getField = (row, path) => path.split('.').reduce((o, k) => (o == null ? o : o[k]), row);
-
-function useClientTable(rowsGetter, searchFields) {
-    const t = reactive({ search: '', perPage: 10, currentPage: 1 });
-    const filtered = computed(() => {
-        const q = t.search.trim().toLowerCase();
-        let rows = rowsGetter() || [];
-        if (q) {
-            rows = rows.filter((r) => searchFields.some((f) => String(getField(r, f) ?? '').toLowerCase().includes(q)));
-        }
-        return rows;
-    });
-    t.total = computed(() => filtered.value.length);
-    t.lastPage = computed(() => Math.max(1, Math.ceil(filtered.value.length / t.perPage)));
-    t.data = computed(() => {
-        const start = (t.currentPage - 1) * t.perPage;
-        return filtered.value.slice(start, start + t.perPage);
-    });
-    t.showingText = computed(() => {
-        const total = filtered.value.length;
-        if (total === 0) return 'No records found';
-        const from = (t.currentPage - 1) * t.perPage + 1;
-        const to = Math.min(t.currentPage * t.perPage, total);
-        return `Showing ${from} to ${to} of ${total} records`;
-    });
-    t.goToPage = (p) => { if (p >= 1 && p <= t.lastPage) t.currentPage = p; };
-    t.changePerPage = (n) => { t.perPage = n; t.currentPage = 1; };
-    watch(() => t.search, () => { t.currentPage = 1; });
-    return t;
-}
+    { id: 'receive', label: 'Receive', badge: (props.receivingSummary.pending || 0) + outgoingReceivingCount.value },
+]);
 
 const custTable = useClientTable(() => props.customers, ['name', 'email', 'phone']);
 const progTable = useClientTable(() => props.programs, ['name', 'description']);
@@ -106,7 +84,18 @@ const voucherStats = computed(() => [
     { label: 'Recognized', value: `₱${formatAmount(props.voucherSummary.recognized)}`, tone: 'text-emerald-700' },
 ]);
 
-const statCards = computed(() => (currentTab.value === 'vouchers' ? voucherStats.value : loyaltyStats.value));
+const receivingStats = computed(() => [
+    { label: 'To Receive', value: props.receivingSummary.pending ?? 0, tone: 'text-amber-600' },
+    { label: 'Units Pending', value: props.receivingSummary.units_pending ?? 0, tone: 'text-slate-900' },
+    { label: 'Units Received', value: props.receivingSummary.units_received ?? 0, tone: 'text-emerald-600' },
+    { label: 'Damaged', value: props.receivingSummary.units_damaged ?? 0, tone: 'text-orange-600' },
+    { label: 'Unserved · In Transit', value: props.receivingSummary.units_in_transit ?? 0, tone: 'text-rose-600' },
+]);
+
+const statCards = computed(() => ({
+    vouchers: voucherStats.value,
+    receive: receivingStats.value,
+}[currentTab.value] || loyaltyStats.value));
 
 /* ------------------------------------------------------------------ *
  | Verify / Use Voucher lives in the page header beside the other two
@@ -724,6 +713,7 @@ const submitRedeem = () => {
                         @click="currentTab = t.id"
                     >
                         {{ t.label }}
+                        <span v-if="t.badge" class="ml-1.5 inline-flex min-w-5 items-center justify-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] font-black text-amber-800">{{ t.badge }}</span>
                     </button>
                 </nav>
             </div>
@@ -960,6 +950,14 @@ const submitRedeem = () => {
                 :customers="customers"
                 :store="store"
                 :summary="voucherSummary"
+            />
+
+            <!-- RECEIVE TAB -->
+            <ReceivePanel
+                v-if="currentTab === 'receive'"
+                :receivings="receivings"
+                :outgoing="outgoingInTransit"
+                :store="store"
             />
         </div>
 

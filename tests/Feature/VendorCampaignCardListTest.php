@@ -150,6 +150,23 @@ class VendorCampaignCardListTest extends TestCase
             $table->timestamp('voided_at')->nullable();
             $table->timestamps();
         });
+        // ...and the Receive tab.
+        Schema::create('stock_receivings', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('stock_transfer_id')->nullable();
+            $table->string('receiving_no')->nullable();
+            $table->date('receiving_date');
+            $table->string('origin_location')->nullable();
+            $table->string('destination_location')->nullable();
+            $table->unsignedBigInteger('asset_id');
+            $table->integer('transferred_quantity')->default(1);
+            $table->integer('received_quantity')->default(1);
+            $table->string('condition')->default('Good');
+            $table->string('status')->default('For Receiving');
+            $table->string('received_by')->nullable();
+            $table->timestamp('received_at')->nullable();
+            $table->timestamps();
+        });
 
         $company = Company::create(['name' => 'Entity', 'code' => 'CMP']);
         $this->store = Store::create(['name' => 'Assigned store', 'code' => 'A', 'company_id' => $company->id]);

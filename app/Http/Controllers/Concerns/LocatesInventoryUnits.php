@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Concerns;
 
 use App\Models\StockIn;
+use App\Models\StockReceiving;
 use App\Models\Store;
 use Closure;
 use Illuminate\Support\Collection;
@@ -65,6 +66,10 @@ trait LocatesInventoryUnits
      * Current location = destination of the latest "Received" transfer, else the
      * original StockIn destination.
      *
+     * A piece whose latest Received transfer was closed without it arriving —
+     * written off as lost in transit, or posted as zero — is on no shelf at
+     * all, even though that transfer reads Received.
+     *
      * @return Collection<int, StockIn>
      */
     protected function fixedUnitsCurrentlyAt(array $locationVariants, ?Closure $stockInQuery = null): Collection
@@ -72,6 +77,14 @@ trait LocatesInventoryUnits
         if (empty($locationVariants)) {
             return collect();
         }
+
+        $neverArrived = StockReceiving::query()
+            ->whereIn('destination_location', $locationVariants)
+            ->where('status', 'Received')
+            ->where('received_quantity', '<', 1)
+            ->whereNotNull('stock_transfer_id')
+            ->pluck('stock_transfer_id')
+            ->flip();
 
         $query = StockIn::query()
             ->where('stock_ins.status', 'Posted')
@@ -87,11 +100,12 @@ trait LocatesInventoryUnits
         }
 
         return $query->get()
-            ->filter(function (StockIn $unit) use ($locationVariants) {
+            ->filter(function (StockIn $unit) use ($locationVariants, $neverArrived) {
                 $lastReceived = $unit->sourceStockTransfers->firstWhere('status', 'Received');
 
                 if ($lastReceived) {
-                    return in_array($lastReceived->destination_location, $locationVariants, true);
+                    return in_array($lastReceived->destination_location, $locationVariants, true)
+                        && ! $neverArrived->has($lastReceived->id);
                 }
 
                 return in_array($unit->destination_location, $locationVariants, true);
