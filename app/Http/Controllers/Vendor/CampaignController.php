@@ -46,6 +46,13 @@ class CampaignController extends Controller
 {
     use LocatesInventoryUnits;
 
+    /**
+     * Whether a redemption must name each unit by scanning its barcode/QR.
+     * Switched off for now: the cashier picks the reward item only, and the
+     * next available coded unit on this store's shelf is assigned to it.
+     */
+    public const REQUIRE_UNIT_SCAN = false;
+
     public function index(CampaignReceivingService $receiving)
     {
         $store = CashierContext::store();
@@ -116,6 +123,7 @@ class CampaignController extends Controller
             'receivings' => $receivings,
             'receivingSummary' => $receiving->summarize($receivings),
             'outgoingInTransit' => $receiving->outgoingInTransit($storeVariants),
+            'requireUnitScan' => self::REQUIRE_UNIT_SCAN,
         ]);
     }
 
@@ -471,13 +479,15 @@ class CampaignController extends Controller
         $data = $request->validate([
             'asset_id' => 'required|exists:assets,id',
             'quantity' => 'required|integer|min:1|max:1000',
-            'stock_in_ids' => 'required|array|min:1|max:1000',
+            'stock_in_ids' => self::REQUIRE_UNIT_SCAN ? 'required|array|min:1|max:1000' : 'nullable|array|max:1000',
             'stock_in_ids.*' => 'required|integer|distinct|exists:stock_ins,id',
             'remarks' => 'nullable|string|max:255',
         ]);
 
-        $stockInIds = collect($data['stock_in_ids'])->map(fn ($id) => (int) $id)->values();
-        if ($stockInIds->count() !== (int) $data['quantity']) {
+        // Empty only when the scan step is off; the units are then assigned
+        // inside the transaction.
+        $stockInIds = collect($data['stock_in_ids'] ?? [])->map(fn ($id) => (int) $id)->values();
+        if ($stockInIds->isNotEmpty() && $stockInIds->count() !== (int) $data['quantity']) {
             throw ValidationException::withMessages([
                 'stock_in_ids' => 'Select one specific barcode/QR code for each quantity being redeemed.',
             ]);
@@ -497,7 +507,11 @@ class CampaignController extends Controller
                 throw ValidationException::withMessages(['asset_id' => 'Only a completed card can be redeemed.']);
             }
 
-            StockIn::query()->whereIn('id', $stockInIds)->lockForUpdate()->get();
+            $quantity = $stockInIds->isEmpty() ? (int) $data['quantity'] : $stockInIds->count();
+
+            if ($stockInIds->isNotEmpty()) {
+                StockIn::query()->whereIn('id', $stockInIds)->lockForUpdate()->get();
+            }
 
             $soh = (int) InventoryTransaction::query()
                 ->validInventoryLedger('inventory_transactions', 'portal_redeem_valid')
@@ -505,13 +519,28 @@ class CampaignController extends Controller
                 ->whereIn('inventory_transactions.location', $variants)
                 ->sum('inventory_transactions.quantity');
 
-            if ($soh < $stockInIds->count()) {
+            if ($soh < $quantity) {
                 throw ValidationException::withMessages([
                     'quantity' => "Insufficient stock at {$location}. Available: {$soh}.",
                 ]);
             }
 
             $availableUnits = $this->redeemableUnitsAt($asset, $variants, $soh)->keyBy('id');
+
+            if ($stockInIds->isEmpty()) {
+                // No scan: release the next available coded units, then lock and
+                // re-check them so two tills cannot be handed the same piece.
+                $stockInIds = $availableUnits->keys()->take($quantity)->values();
+                if ($stockInIds->count() < $quantity) {
+                    throw ValidationException::withMessages([
+                        'asset_id' => 'No barcoded/QR-coded unit of this item is available to release at this store.',
+                    ]);
+                }
+
+                StockIn::query()->whereIn('id', $stockInIds)->lockForUpdate()->get();
+                $availableUnits = $this->redeemableUnitsAt($asset, $variants, $soh)->keyBy('id');
+            }
+
             if ($stockInIds->diff($availableUnits->keys())->isNotEmpty()) {
                 throw ValidationException::withMessages([
                     'stock_in_ids' => 'One or more selected barcode/QR codes are no longer available at this location.',

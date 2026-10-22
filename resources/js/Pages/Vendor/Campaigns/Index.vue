@@ -37,6 +37,7 @@ const props = defineProps({
     receivings: { type: Array, default: () => [] },
     receivingSummary: { type: Object, default: () => ({}) },
     outgoingInTransit: { type: Array, default: () => [] },
+    requireUnitScan: { type: Boolean, default: true },
 });
 
 const { addToast } = useToast();
@@ -451,6 +452,11 @@ const loadRedeemUnits = async (assetId) => {
     redeemUnitOptions.value = [];
     redeemCodeSearch.value = '';
     if (!assetId) return;
+    // Scan step switched off: one reward, and the server assigns the unit.
+    if (!props.requireUnitScan) {
+        redeemForm.quantity = 1;
+        return;
+    }
     loadingRedeemUnits.value = true;
     try {
         const res = await axios.get(route('vendor.campaigns.assets.units-at-location', { asset: assetId }));
@@ -1211,7 +1217,7 @@ const submitRedeem = () => {
                     <p v-if="redeemForm.errors.asset_id" class="mt-1 text-xs font-bold text-rose-600">{{ redeemForm.errors.asset_id }}</p>
                 </div>
 
-                <div v-if="redeemForm.asset_id">
+                <div v-if="requireUnitScan && redeemForm.asset_id">
                     <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">
                         Scan the unit's barcode / QR code <span class="text-rose-500">*</span>
                     </label>
@@ -1244,9 +1250,9 @@ const submitRedeem = () => {
                             <button type="button" class="font-bold text-rose-600 hover:text-rose-800" @click="removeRedeemUnit(unit.stock_in_id)">Remove</button>
                         </div>
                     </div>
-                    <p v-if="redeemForm.errors.stock_in_ids" class="mt-1 text-xs font-bold text-rose-600">{{ redeemForm.errors.stock_in_ids }}</p>
-                    <p v-if="redeemForm.errors.quantity" class="mt-1 text-xs font-bold text-rose-600">{{ redeemForm.errors.quantity }}</p>
                 </div>
+                <p v-if="redeemForm.errors.stock_in_ids" class="text-xs font-bold text-rose-600">{{ redeemForm.errors.stock_in_ids }}</p>
+                <p v-if="redeemForm.errors.quantity" class="text-xs font-bold text-rose-600">{{ redeemForm.errors.quantity }}</p>
 
                 <div>
                     <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Remarks</label>
@@ -1257,11 +1263,11 @@ const submitRedeem = () => {
                     <button type="button" class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50" @click="redeemModal.open = false">Cancel</button>
                     <button
                         type="button"
-                        :disabled="redeemForm.processing || !redeemForm.stock_in_ids.length"
+                        :disabled="redeemForm.processing || !(requireUnitScan ? redeemForm.stock_in_ids.length : redeemForm.asset_id)"
                         class="rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 px-4 py-2 text-xs font-black uppercase tracking-wider text-white shadow-md shadow-amber-500/20 hover:from-amber-600 hover:to-orange-600 disabled:opacity-50"
                         @click="submitRedeem"
                     >
-                        {{ redeemForm.processing ? 'Redeeming…' : `Redeem ${redeemForm.stock_in_ids.length || ''} unit(s)` }}
+                        {{ redeemForm.processing ? 'Redeeming…' : (requireUnitScan ? `Redeem ${redeemForm.stock_in_ids.length || ''} unit(s)` : 'Redeem reward') }}
                     </button>
                 </div>
             </div>
