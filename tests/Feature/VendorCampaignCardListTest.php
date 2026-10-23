@@ -68,6 +68,8 @@ class VendorCampaignCardListTest extends TestCase
             $table->unsignedBigInteger('company_id')->nullable();
             $table->string('name');
             $table->integer('stamps_required');
+            $table->integer('holiday_stamps')->default(0);
+            $table->integer('max_cards_per_customer')->nullable();
             $table->decimal('auto_stamp_amount', 12, 2)->nullable();
             $table->timestamps();
         });
@@ -77,6 +79,7 @@ class VendorCampaignCardListTest extends TestCase
             $table->unsignedBigInteger('stamp_program_id');
             $table->unsignedBigInteger('store_id')->nullable();
             $table->integer('stamps_count')->default(0);
+            $table->integer('holiday_count')->default(0);
             $table->string('status');
             $table->timestamp('completed_at')->nullable();
             $table->timestamp('redeemed_at')->nullable();
@@ -88,6 +91,7 @@ class VendorCampaignCardListTest extends TestCase
             $table->unsignedBigInteger('stamp_card_id');
             $table->unsignedBigInteger('store_id')->nullable();
             $table->integer('quantity');
+            $table->string('stamp_type', 20)->default('regular');
             $table->string('source');
             $table->decimal('purchase_amount', 12, 2)->nullable();
             $table->string('receipt_number', 100)->nullable();

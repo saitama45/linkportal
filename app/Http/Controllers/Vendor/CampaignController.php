@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Vendor;
 
 use App\Http\Controllers\Concerns\LocatesInventoryUnits;
 use App\Http\Controllers\Controller;
+use App\Http\Services\AuditLogger;
 use App\Models\Asset;
 use App\Models\Customer;
 use App\Models\InventoryTransaction;
@@ -21,6 +22,8 @@ use App\Models\VoucherRedemption;
 use App\Services\CampaignReceivingService;
 use App\Services\LoyaltyQrService;
 use App\Services\LoyaltyRedeemQrService;
+use App\Services\StampAllocator;
+use App\Services\StampAward;
 use App\Support\CashierContext;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -74,7 +77,7 @@ class CampaignController extends Controller
                 ->get(),
             'cards' => StampCard::with([
                 'customer:id,name,email',
-                'program:id,name,stamps_required,auto_stamp_amount',
+                'program:id,name,stamps_required,holiday_stamps,max_cards_per_customer,auto_stamp_amount',
                 'store:id,code,name',
             ])
                 ->where($this->cardsOfStore($storeId))
@@ -195,108 +198,222 @@ class CampaignController extends Controller
 
         return response()->json([
             'customer' => $customer->only(['id', 'name', 'email', 'phone']),
-            'cards' => $customer->stampCards()
-                ->with('program:id,name,stamps_required')
-                ->whereIn('status', ['active', 'completed'])
-                ->get(['id', 'stamp_program_id', 'stamps_count', 'status']),
+            'cards' => $this->openCardsForScan($customer),
+            // Cards held per program, redeemed ones included — what a
+            // program's card limit counts against.
+            'cards_held' => $customer->stampCards()
+                ->selectRaw('stamp_program_id, COUNT(*) as held')
+                ->groupBy('stamp_program_id')
+                ->pluck('held', 'stamp_program_id'),
         ]);
     }
 
-    public function scanAddStamp(Request $request)
+    /**
+     * The member's unredeemed cards, each with its number among all their
+     * cards for that program ("card 2 of 3") and its holiday/regular split,
+     * so the scan modal can say where the next stamp will land. Mirrors the
+     * hub's StampController::openCardsForScan.
+     */
+    private function openCardsForScan(Customer $customer)
+    {
+        $numbers = [];
+        $all = $customer->stampCards()->orderBy('id')->get(['id', 'stamp_program_id']);
+        foreach ($all->groupBy('stamp_program_id') as $group) {
+            foreach ($group->values() as $i => $card) {
+                $numbers[$card->id] = $i + 1;
+            }
+        }
+
+        return $customer->stampCards()
+            ->with('program:id,name,stamps_required,holiday_stamps,max_cards_per_customer')
+            ->whereIn('status', ['active', 'completed'])
+            ->orderBy('id')
+            ->get(['id', 'stamp_program_id', 'stamps_count', 'holiday_count', 'status'])
+            ->each(function (StampCard $card) use ($numbers) {
+                $card->setAttribute('card_number', $numbers[$card->id] ?? null);
+                if ($card->program) {
+                    $card->setAttribute('holiday_filled', $card->holidayFilled($card->program));
+                    $card->setAttribute('regular_filled', $card->regularFilled($card->program));
+                }
+            })
+            ->values();
+    }
+
+    public function scanAddStamp(Request $request, StampAllocator $allocator)
     {
         $data = $request->validate([
             'token' => 'required|string|max:255',
             'stamp_program_id' => 'required|exists:stamp_programs,id',
+            'stamp_type' => 'nullable|in:'.implode(',', StampAllocator::TYPES),
             'quantity' => 'nullable|integer|min:1|max:1000',
             'purchase_amount' => 'required|numeric|min:0.01',
-            'receipt_number' => 'required|string|max:100',
+            // Optional at the scan, unlike Add Stamps / Record Purchase: the
+            // counter scans while the sale is being rung up, often before the
+            // POS has printed a receipt. When one is given it is still held to
+            // once-per-store (assertReceiptUnusedAtStore).
+            'receipt_number' => 'nullable|string|max:100',
             'note' => 'nullable|string|max:255',
         ]);
 
         $this->assertProgramInScope((int) $data['stamp_program_id']);
 
         $customer = $this->customerFromToken($data['token']);
-        $storeId = CashierContext::storeId();
-        $vendorId = CashierContext::vendor()->id;
-        $applied = 0;
+        $program = StampProgram::findOrFail($data['stamp_program_id']);
 
-        $card = DB::transaction(function () use ($customer, $data, $storeId, $vendorId, &$applied) {
-            // Reuse the member's ACTIVE card for this program at ANY store, the
-            // way the hub does — a loyalty card follows the customer, not the
-            // branch. Only a brand-new card is stamped with this till's store.
-            //
-            // A full card still waiting to be redeemed is passed over rather
-            // than matched and then refused: the customer is at the till buying
-            // again, and requiring them to claim the previous reward first
-            // would be turning away a sale. The full card stays claimable and
-            // this purchase opens the next cycle on a new card — one customer
-            // legitimately holding two cards for one program, which the
-            // redemption side already handles (`resolveRedeemScan` resolves a
-            // specific card id). Mirrors `StampController::scanAddStamp`.
-            $card = StampCard::where('customer_id', $customer->id)
-                ->where('stamp_program_id', $data['stamp_program_id'])
-                ->where('status', 'active')
-                ->oldest('id')
-                ->first();
+        // Which card each stamp lands on is StampAllocator's call, the same as
+        // at the hub: the member's oldest ACTIVE card with a free slot of the
+        // requested type at ANY store (a loyalty card follows the customer,
+        // not the branch), else a new card within the program's limit, stamped
+        // with this till's store. A full card waiting to be redeemed is passed
+        // over, not refused — the customer is buying again, and their earned
+        // reward stays claimable on its own card.
+        $award = $this->award(
+            $allocator,
+            (int) $customer->id,
+            $program,
+            $data['stamp_type'] ?? StampAllocator::REGULAR,
+            (int) ($data['quantity'] ?? 1),
+            $data['purchase_amount'],
+            'scan',
+            $data['note'] ?? null,
+            filled($data['receipt_number'] ?? null) ? trim($data['receipt_number']) : null,
+        );
 
-            if (! $card) {
-                $card = StampCard::create([
-                    'customer_id' => $customer->id,
-                    'stamp_program_id' => $data['stamp_program_id'],
-                    'store_id' => $storeId,
-                    'stamps_count' => 0,
-                    'status' => 'active',
-                    'cashier_vendor_id' => $vendorId,
-                ]);
-            }
-
-            $applied = $this->applyStamps(
-                $card,
-                (int) ($data['quantity'] ?? 1),
-                'scan',
-                $data['purchase_amount'],
-                $data['note'] ?? null,
-                trim($data['receipt_number']),
-            );
-
-            return $card->fresh(['customer:id,name', 'program:id,name,stamps_required']);
-        });
-
-        return response()->json(['card' => $card, 'applied' => $applied]);
+        // The award can differ from the request — holiday stamps landing as
+        // regular, stamps past the card limit refused — so the cashier is told
+        // what actually happened rather than the request echoed back.
+        return response()->json([
+            'card' => $award->cards->last()->fresh(['customer:id,name', 'program:id,name,stamps_required,holiday_stamps']),
+            ...$award->toArray(),
+            'message' => $award->message($customer->name),
+        ]);
     }
 
     /* ----------------------------------------------------------------------
      | Cards
      * ------------------------------------------------------------------- */
 
-    public function addStamps(Request $request, StampCard $card)
+    public function addStamps(Request $request, StampCard $card, StampAllocator $allocator)
     {
         $this->assertCardInScope($card);
 
         $data = $request->validate([
+            'stamp_type' => 'nullable|in:'.implode(',', StampAllocator::TYPES),
             'quantity' => 'required|integer|min:1|max:1000',
             'purchase_amount' => 'required|numeric|min:0.01',
             'receipt_number' => 'required|string|max:100',
             'note' => 'nullable|string|max:255',
         ]);
 
-        $this->applyStamps(
+        $award = $this->awardFromCard(
             $card,
-            $data['quantity'],
-            'manual',
+            $allocator,
+            $data['stamp_type'] ?? StampAllocator::REGULAR,
+            (int) $data['quantity'],
             $data['purchase_amount'],
+            'manual',
             $data['note'] ?? null,
             trim($data['receipt_number']),
         );
 
-        return back()->with('success', 'Stamps added.');
+        return back()->with('success', $award->message($card->customer?->name ?? 'this member'));
     }
 
-    public function recordPurchase(Request $request, StampCard $card)
+    /**
+     * Take back stamps added by mistake — a wrong member scanned, a wrong
+     * quantity typed, a Holiday stamp that should have been Regular.
+     *
+     * Recorded, never erased: the correction is its own entry with a negative
+     * quantity, source `deduction` and the cashier's reason in `note`, so the
+     * card's history still shows the original stamp and who took it back and
+     * why. The cashier says which kind of slot to empty (holiday or regular),
+     * and can never take back more of that kind than the card holds.
+     *
+     * A redeemed card is refused — that reward has already left the counter.
+     * A full card waiting to be redeemed drops back to active, which also
+     * retires its redeem code (`resolveRedeemScan` only honours `completed`).
+     */
+    public function deductStamps(Request $request, StampCard $card)
     {
         $this->assertCardInScope($card);
 
         $data = $request->validate([
+            'stamp_type' => 'nullable|in:'.implode(',', StampAllocator::TYPES),
+            'quantity' => 'required|integer|min:1|max:1000',
+            'reason' => 'required|string|min:5|max:255',
+        ]);
+
+        $storeId = CashierContext::storeId();
+        $vendorId = CashierContext::vendor()->id;
+        $quantity = (int) $data['quantity'];
+        $reason = trim($data['reason']);
+
+        [$type, $before, $after] = DB::transaction(function () use ($card, $data, $quantity, $reason, $storeId, $vendorId) {
+            $locked = StampCard::with('program')->lockForUpdate()->findOrFail($card->id);
+
+            if ($locked->status === 'redeemed') {
+                throw ValidationException::withMessages([
+                    'quantity' => 'This reward has already been redeemed, so its stamps can no longer be deducted.',
+                ]);
+            }
+            if (! $locked->program) {
+                throw ValidationException::withMessages([
+                    'quantity' => 'This card has no stamp program assigned, so its stamps cannot be changed.',
+                ]);
+            }
+
+            $type = $locked->program->holidaySlots() > 0 && ($data['stamp_type'] ?? null) === StampAllocator::HOLIDAY
+                ? StampAllocator::HOLIDAY
+                : StampAllocator::REGULAR;
+            $available = $type === StampAllocator::HOLIDAY ? (int) $locked->holiday_count : $locked->regularCount();
+
+            if ($quantity > $available) {
+                $kind = $type === StampAllocator::HOLIDAY ? 'Holiday' : ($locked->program->holidaySlots() > 0 ? 'Regular' : '');
+                throw ValidationException::withMessages([
+                    'quantity' => "This card has only {$available} ".trim("{$kind} ".($available === 1 ? 'stamp' : 'stamps')).' to deduct.',
+                ]);
+            }
+
+            $before = $locked->only(['stamps_count', 'holiday_count', 'status']);
+
+            StampEntry::create([
+                'stamp_card_id' => $locked->id,
+                'store_id' => $storeId,
+                'quantity' => -$quantity,
+                'stamp_type' => $type,
+                'source' => 'deduction',
+                'note' => $reason,
+                'cashier_vendor_id' => $vendorId,
+            ]);
+
+            $locked->stamps_count = (int) $locked->stamps_count - $quantity;
+            if ($type === StampAllocator::HOLIDAY) {
+                $locked->holiday_count = (int) $locked->holiday_count - $quantity;
+            }
+            if ($locked->status === 'completed' && $locked->stamps_count < (int) $locked->program->stamps_required) {
+                $locked->status = 'active';
+                $locked->completed_at = null;
+            }
+            $locked->cashier_vendor_id = $vendorId;
+            $locked->save();
+
+            return [$type, $before, $locked->only(['stamps_count', 'holiday_count', 'status'])];
+        });
+
+        AuditLogger::log('stamp_deducted', $card, $before, $after + ['quantity' => $quantity, 'stamp_type' => $type, 'reason' => $reason]);
+
+        $noun = $quantity === 1 ? 'stamp' : 'stamps';
+        $kind = $type === StampAllocator::HOLIDAY ? 'Holiday ' : '';
+
+        return back()->with('success', "{$quantity} {$kind}{$noun} deducted from {$card->customer?->name}'s card.");
+    }
+
+    public function recordPurchase(Request $request, StampCard $card, StampAllocator $allocator)
+    {
+        $this->assertCardInScope($card);
+
+        $data = $request->validate([
+            'stamp_type' => 'nullable|in:'.implode(',', StampAllocator::TYPES),
             'purchase_amount' => 'required|numeric|min:0.01',
             'receipt_number' => 'required|string|max:100',
             'note' => 'nullable|string|max:255',
@@ -321,16 +438,18 @@ class CampaignController extends Controller
             ]);
         }
 
-        $this->applyStamps(
+        $award = $this->awardFromCard(
             $card,
+            $allocator,
+            $data['stamp_type'] ?? StampAllocator::REGULAR,
             $earned,
-            'purchase',
             $data['purchase_amount'],
+            'purchase',
             $data['note'] ?? null,
             trim($data['receipt_number']),
         );
 
-        return back()->with('success', "Recorded purchase — {$earned} stamp(s) earned.");
+        return back()->with('success', 'Recorded purchase — '.$award->message($card->customer?->name ?? 'this member'));
     }
 
     public function cardEntries(StampCard $card)
@@ -338,7 +457,7 @@ class CampaignController extends Controller
         $this->assertCardInScope($card);
 
         return response()->json([
-            'card' => $card->load(['customer:id,name', 'program:id,name,stamps_required']),
+            'card' => $card->load(['customer:id,name', 'program:id,name,stamps_required,holiday_stamps']),
             'entries' => $card->entries()
                 ->with(['store:id,code,name', 'creator:id,name', 'cashierVendor:id,name'])
                 ->orderByDesc('created_at')
@@ -347,11 +466,11 @@ class CampaignController extends Controller
     }
 
     /**
-     * Cap at the program threshold, flip the card to "completed" when it fills,
-     * and return how many stamps actually fit — which can be fewer than were
-     * asked for. Mirrors the hub's StampController::applyStamps.
+     * Add Stamps / Record Purchase start from a card the cashier opened, but
+     * the stamps are placed by the same rules as a scan — the card names the
+     * member and program; StampAllocator decides the slot.
      */
-    private function applyStamps(StampCard $card, int $quantity, string $source, $purchaseAmount, ?string $note, string $receiptNumber): int
+    private function awardFromCard(StampCard $card, StampAllocator $allocator, string $type, int $quantity, $purchaseAmount, string $source, ?string $note, string $receiptNumber): StampAward
     {
         if ($card->status !== 'active') {
             throw ValidationException::withMessages(['quantity' => 'Stamps can only be added to an active card.']);
@@ -363,43 +482,43 @@ class CampaignController extends Controller
             ]);
         }
 
-        $required = (int) $card->program->stamps_required;
-        $applied = min($quantity, max(0, $required - $card->stamps_count));
+        return $this->award($allocator, (int) $card->customer_id, $card->program, $type, $quantity, $purchaseAmount, $source, $note, $receiptNumber);
+    }
 
-        if ($applied < 1) {
-            throw ValidationException::withMessages(['quantity' => 'This card is already full.']);
-        }
-
+    /**
+     * One receipt, one award: the receipt is checked once for the whole
+     * purchase — however many cards its stamps spread over — and in the same
+     * transaction that writes them, so the store lock it takes is still held
+     * when the entries carrying that receipt land. A scan may carry no receipt
+     * at all; there is then nothing to hold unique.
+     */
+    private function award(StampAllocator $allocator, int $customerId, StampProgram $program, string $type, int $quantity, $purchaseAmount, string $source, ?string $note, ?string $receiptNumber): StampAward
+    {
         $storeId = CashierContext::storeId();
         $vendorId = CashierContext::vendor()->id;
 
-        DB::transaction(function () use ($card, $applied, $source, $purchaseAmount, $note, $receiptNumber, $storeId, $vendorId, $required) {
-            $this->assertReceiptUnusedAtStore($storeId, $receiptNumber);
-
-            StampEntry::create([
-                'stamp_card_id' => $card->id,
-                'store_id' => $storeId,
-                'quantity' => $applied,
-                'source' => $source,
-                'purchase_amount' => $purchaseAmount,
-                'receipt_number' => $receiptNumber,
-                'note' => $note,
-                'cashier_vendor_id' => $vendorId,
-            ]);
-
-            $card->stamps_count += $applied;
-            $card->cashier_vendor_id = $vendorId;
-
-            if ($card->stamps_count >= $required) {
-                $card->stamps_count = $required;
-                $card->status = 'completed';
-                $card->completed_at = now();
+        return DB::transaction(function () use ($allocator, $customerId, $program, $type, $quantity, $purchaseAmount, $source, $note, $receiptNumber, $storeId, $vendorId) {
+            if ($receiptNumber !== null) {
+                $this->assertReceiptUnusedAtStore($storeId, $receiptNumber);
             }
 
-            $card->save();
+            return $allocator->award(
+                $customerId,
+                $program,
+                $type,
+                $quantity,
+                $purchaseAmount,
+                newCard: ['store_id' => $storeId, 'cashier_vendor_id' => $vendorId],
+                touch: ['cashier_vendor_id' => $vendorId],
+                entry: [
+                    'store_id' => $storeId,
+                    'source' => $source,
+                    'receipt_number' => $receiptNumber,
+                    'note' => $note,
+                    'cashier_vendor_id' => $vendorId,
+                ],
+            );
         });
-
-        return $applied;
     }
 
     /**

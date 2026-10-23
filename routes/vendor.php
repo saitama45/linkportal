@@ -104,6 +104,7 @@ Route::prefix('vendor')->name('vendor.')->group(function () {
 
                 Route::get('cards/{card}/entries', [CampaignController::class, 'cardEntries'])->name('cards.entries');
                 Route::post('cards/{card}/add-stamps', [CampaignController::class, 'addStamps'])->name('cards.add-stamps');
+                Route::post('cards/{card}/deduct-stamps', [CampaignController::class, 'deductStamps'])->name('cards.deduct-stamps');
                 Route::post('cards/{card}/record-purchase', [CampaignController::class, 'recordPurchase'])->name('cards.record-purchase');
                 Route::post('cards/{card}/redeem', [CampaignController::class, 'redeem'])->name('cards.redeem');
 

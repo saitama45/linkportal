@@ -64,6 +64,8 @@ class VendorCampaignReceiptTest extends TestCase
             $table->unsignedBigInteger('company_id')->nullable();
             $table->string('name');
             $table->integer('stamps_required');
+            $table->integer('holiday_stamps')->default(0);
+            $table->integer('max_cards_per_customer')->nullable();
             $table->decimal('auto_stamp_amount', 12, 2)->nullable();
             $table->timestamps();
         });
@@ -73,6 +75,7 @@ class VendorCampaignReceiptTest extends TestCase
             $table->unsignedBigInteger('stamp_program_id');
             $table->unsignedBigInteger('store_id')->nullable();
             $table->integer('stamps_count')->default(0);
+            $table->integer('holiday_count')->default(0);
             $table->string('status');
             $table->timestamp('completed_at')->nullable();
             $table->timestamp('redeemed_at')->nullable();
@@ -84,6 +87,7 @@ class VendorCampaignReceiptTest extends TestCase
             $table->unsignedBigInteger('stamp_card_id');
             $table->unsignedBigInteger('store_id')->nullable();
             $table->integer('quantity');
+            $table->string('stamp_type', 20)->default('regular');
             $table->string('source');
             $table->decimal('purchase_amount', 12, 2)->nullable();
             $table->string('receipt_number', 100)->nullable();
@@ -262,5 +266,92 @@ class VendorCampaignReceiptTest extends TestCase
             ->assertSessionHasNoErrors();
 
         $this->assertSame(2, StampEntry::count());
+    }
+
+    /**
+     * The scan may go through before the POS has printed a receipt, so the
+     * number is optional there — and two receipt-less scans are not "the same
+     * receipt". Add Stamps and Record Purchase still require one (tests above).
+     */
+    public function test_a_scan_without_a_receipt_number_is_accepted_more_than_once(): void
+    {
+        $member = $this->member('First');
+
+        foreach (['', null] as $blank) {
+            $this->actingAs($this->cashier, 'vendor')->postJson(route('vendor.campaigns.scan.add-stamp'), [
+                'token' => $this->tokenFor($member),
+                'stamp_program_id' => $this->program->id,
+                'quantity' => 1,
+                'purchase_amount' => 150,
+                'receipt_number' => $blank,
+            ])->assertOk();
+        }
+
+        $this->assertSame(2, StampEntry::whereNull('receipt_number')->count());
+        $this->assertSame(2, StampCard::sole()->stamps_count);
+    }
+
+    public function test_a_receipt_given_at_the_scan_is_still_once_per_store(): void
+    {
+        $this->scan($this->cashier, $this->member('First'), 'OR-7001')->assertOk();
+
+        $this->scan($this->cashier, $this->member('Second'), ' or-7001 ')
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('receipt_number');
+    }
+
+    /*
+     | Holiday slots and the card limit (StampAllocator, shared with the hub).
+     | The program becomes the paper holiday card: 4 Holiday + 6 Regular of
+     | its 10 stamps, at most 2 cards per member.
+     */
+
+    private function holidayScan(Customer $customer, string $receipt, string $type, int $quantity = 1)
+    {
+        $this->program->update(['holiday_stamps' => 4, 'max_cards_per_customer' => 2]);
+
+        return $this->actingAs($this->cashier, 'vendor')->postJson(route('vendor.campaigns.scan.add-stamp'), [
+            'token' => $this->tokenFor($customer),
+            'stamp_program_id' => $this->program->id,
+            'stamp_type' => $type,
+            'quantity' => $quantity,
+            'purchase_amount' => 600,
+            'receipt_number' => $receipt,
+        ]);
+    }
+
+    public function test_one_receipt_whose_holiday_stamps_spread_over_two_cards_is_accepted_once(): void
+    {
+        $member = $this->member('First');
+
+        // Five holiday stamps: card 1 takes its four, the fifth opens card 2.
+        $this->holidayScan($member, 'OR-5001', 'holiday', 5)
+            ->assertOk()
+            ->assertJsonPath('holiday', 5)
+            ->assertJsonCount(2, 'card_ids');
+
+        $this->assertSame([4, 1], StampCard::orderBy('id')->pluck('holiday_count')->all());
+        $this->assertSame(['OR-5001', 'OR-5001'], StampEntry::orderBy('id')->pluck('receipt_number')->all());
+        $this->assertSame(600.0, (float) StampEntry::sum('purchase_amount'), 'the sale is counted once');
+
+        // ...and the receipt is now spent at this store.
+        $this->holidayScan($this->member('Second'), 'OR-5001', 'regular')
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('receipt_number');
+    }
+
+    public function test_a_holiday_stamp_turns_regular_once_both_allowed_cards_have_their_holiday_slots_filled(): void
+    {
+        $member = $this->member('First');
+        $this->holidayScan($member, 'OR-6001', 'holiday', 8)->assertOk();
+
+        $response = $this->holidayScan($member, 'OR-6002', 'holiday')
+            ->assertOk()
+            ->assertJsonPath('converted', 1)
+            ->assertJsonPath('regular', 1);
+
+        $this->assertStringContainsString('became Regular', $response->json('message'));
+        $this->assertSame(2, StampCard::count(), 'no third card past the limit');
+        $this->assertSame('regular', StampEntry::latest('id')->value('stamp_type'));
     }
 }

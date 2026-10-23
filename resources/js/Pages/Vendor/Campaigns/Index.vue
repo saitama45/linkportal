@@ -18,6 +18,7 @@ import VendorLayout from '@/Layouts/VendorLayout.vue';
 import Modal from '@/Components/Modal.vue';
 import Autocomplete from '@/Components/Autocomplete.vue';
 import CampaignTable from '@/Components/Campaigns/CampaignTable.vue';
+import StampTypePicker from '@/Components/Campaigns/StampTypePicker.vue';
 import VoucherPanel from './VoucherPanel.vue';
 import ReceivePanel from './ReceivePanel.vue';
 import { QrCodeIcon } from '@heroicons/vue/24/outline';
@@ -113,7 +114,16 @@ const openVoucherScan = async () => {
 
 const programOptions = computed(() => props.programs
     .filter((p) => p.is_active)
-    .map((p) => ({ label: `${p.name} — ${p.stamps_required} stamps`, value: p.id })));
+    .map((p) => ({
+        label: `${p.name} — ${p.stamps_required} stamps${p.holiday_stamps > 0 ? ` (${p.holiday_stamps} holiday)` : ''}`,
+        value: p.id,
+    })));
+
+// Holiday slots are part of a card's stamps, not extra (StampAllocator), and a
+// program edited mid-campaign can leave a card with more holiday stamps than
+// slots — those count as regular, so clamp for display the same way.
+const holidaySlotsOf = (program) => Math.max(0, Math.min(Number(program?.holiday_stamps || 0), Number(program?.stamps_required || 0)));
+const holidayFilledOf = (card) => Math.min(Number(card?.holiday_count || 0), holidaySlotsOf(card?.program));
 
 /* ------------------------------------------------------------------ *
  | Formatting helpers
@@ -143,7 +153,10 @@ const actorName = (row) => row.creator?.name || row.cashier_vendor?.name || '—
  | Store never appears: it is the cashier's own till. Program is
  | remembered per device, since a counter runs one campaign at a time.
  * ------------------------------------------------------------------ */
-const scanModal = reactive({ open: false, step: 'scan', resolving: false, submitting: false, customer: null, cards: [], error: null });
+const scanModal = reactive({ open: false, step: 'scan', resolving: false, submitting: false, customer: null, cards: [], cardsHeld: {}, error: null });
+// Per purchase, like the amount: what was bought decides it, so it starts at
+// Regular on every scan rather than being remembered.
+const scanStampType = ref('regular');
 const scanTokenInput = ref('');
 const scanTokenInputRef = ref(null);
 const scanPurchaseAmountInputRef = ref(null);
@@ -180,12 +193,13 @@ watch(programOptions, (options) => {
 }, { immediate: true });
 
 const openScanModal = () => {
-    Object.assign(scanModal, { open: true, step: 'scan', resolving: false, submitting: false, customer: null, cards: [], error: null });
+    Object.assign(scanModal, { open: true, step: 'scan', resolving: false, submitting: false, customer: null, cards: [], cardsHeld: {}, error: null });
     scanTokenInput.value = '';
     scanPurchaseAmount.value = null;
     scanReceiptNumber.value = '';
     scanNote.value = '';
     scanQuantity.value = 1;
+    scanStampType.value = 'regular';
     // A hardware scanner types into whatever holds focus, so the token field
     // must be focused before anyone clicks anything.
     nextTick(() => scanTokenInputRef.value?.focus());
@@ -201,6 +215,7 @@ const submitScanToken = async () => {
         const res = await axios.post(route('vendor.campaigns.scan.resolve'), { token });
         scanModal.customer = res.data.customer;
         scanModal.cards = res.data.cards || [];
+        scanModal.cardsHeld = res.data.cards_held || {};
         scanModal.step = 'assign';
         nextTick(() => scanPurchaseAmountInputRef.value?.focus());
     } catch (e) {
@@ -225,36 +240,64 @@ watch(scanTokenInput, (val) => {
     }, 150);
 });
 
-// The card this scan will actually land on — the ACTIVE one, mirroring the
-// server. A full card awaiting redemption is not it: the server leaves that one
-// alone and opens a new cycle, so treating it as the target here would show 0
-// remaining and block a sale the server is perfectly willing to take.
-const scanCardForSelectedProgram = computed(() => scanModal.cards.find((c) => c.stamp_program_id === scanProgramId.value && c.status === 'active') || null);
+const scanProgram = computed(() => props.programs.find((p) => p.id === scanProgramId.value) || null);
+const scanHolidaySlots = computed(() => holidaySlotsOf(scanProgram.value));
 
-// A completed-but-unredeemed card for the same program. Not a blocker — just
-// worth saying out loud, so the cashier knows a second card is about to start
-// and can offer the waiting reward while the customer is at the till.
-const scanFullCardAwaitingRedemption = computed(() => scanModal.cards.find((c) => c.stamp_program_id === scanProgramId.value && c.status === 'completed') || null);
+// The cards stamps can land on — the ACTIVE ones, mirroring StampAllocator.
+// With holiday slots a member can hold several at once (holiday stamps move to
+// the next card while regular slots are still empty). A full card awaiting
+// redemption is not among them: the server leaves it alone.
+const scanOpenCards = computed(() => scanModal.cards.filter((c) => c.stamp_program_id === scanProgramId.value && c.status === 'active'));
 
-const scanStampsRequired = computed(() => scanCardForSelectedProgram.value?.program?.stamps_required
-    ?? scanFullCardAwaitingRedemption.value?.program?.stamps_required
-    ?? props.programs.find((p) => p.id === scanProgramId.value)?.stamps_required
-    ?? 0);
-const scanRemaining = computed(() => Math.max(0, scanStampsRequired.value - (scanCardForSelectedProgram.value?.stamps_count ?? 0)));
+// Completed-but-unredeemed cards for the same program. Not a blocker — worth
+// saying out loud so the cashier can offer the waiting reward at the till.
+const scanFullCardsAwaitingRedemption = computed(() => scanModal.cards.filter((c) => c.stamp_program_id === scanProgramId.value && c.status === 'completed'));
 
-// Mirrors the server's own rules, so a limit is said out loud here rather than
+// The program's card limit counts every card the member has ever held for it,
+// redeemed ones included (cards_held from the server).
+const scanCardLimit = computed(() => Number(scanProgram.value?.max_cards_per_customer) || null);
+const scanCardsHeld = computed(() => Number(scanModal.cardsHeld?.[scanProgramId.value] ?? 0));
+const scanNewCardsAllowed = computed(() => (scanCardLimit.value === null ? Infinity : Math.max(0, scanCardLimit.value - scanCardsHeld.value)));
+
+// Room left, the way StampAllocator counts it: free slots on the open cards
+// plus whole new cards the limit still allows. Infinite without a limit —
+// stamps that do not fit one card continue on the next.
+const scanRemaining = computed(() => {
+    const required = Number(scanProgram.value?.stamps_required || 0);
+    const free = scanOpenCards.value.reduce((n, c) => n + Math.max(0, required - (c.stamps_count ?? 0)), 0);
+    return free + (scanNewCardsAllowed.value === Infinity ? Infinity : scanNewCardsAllowed.value * required);
+});
+
+// Holiday stamps with no holiday slot left anywhere this member may hold one
+// are recorded as Regular. Said before it happens, not discovered in the toast.
+const scanHolidayNotice = computed(() => {
+    if (scanStampType.value !== 'holiday' || scanHolidaySlots.value < 1) return null;
+    const free = scanOpenCards.value.reduce((n, c) => n + Math.max(0, scanHolidaySlots.value - (c.holiday_filled ?? 0)), 0);
+    const room = free + (scanNewCardsAllowed.value === Infinity ? Infinity : scanNewCardsAllowed.value * scanHolidaySlots.value);
+    if (room >= scanQuantity.value) return null;
+    return room === 0
+        ? 'Every Holiday slot on the cards this member can hold is filled — this will be recorded as a Regular stamp.'
+        : `Only ${room} Holiday slot${room === 1 ? '' : 's'} left — the rest will be recorded as Regular.`;
+});
+
+// Mirrors StampAllocator, so the limit is said out loud here rather than
 // coming back as a failed request.
 const scanQuantityError = computed(() => {
     if (!scanProgramId.value) return null;
     if (!scanQuantity.value || scanQuantity.value < 1) return 'Enter at least 1 stamp.';
-    if (scanRemaining.value > 0 && scanQuantity.value > scanRemaining.value) {
-        return `Only ${scanRemaining.value} stamp${scanRemaining.value === 1 ? '' : 's'} left on this card.`;
+    if (scanQuantity.value > scanRemaining.value) {
+        const cards = `${scanCardLimit.value} card${scanCardLimit.value === 1 ? '' : 's'}`;
+        return scanRemaining.value === 0
+            ? `This member has reached the limit of ${cards} for this campaign, and every one is full.`
+            : `Only ${scanRemaining.value} stamp${scanRemaining.value === 1 ? '' : 's'} left before this member reaches the limit of ${cards}.`;
     }
     return null;
 });
 
 const submitScanAddStamp = async () => {
-    if (!scanProgramId.value || !scanPurchaseAmount.value || !scanReceiptNumber.value.trim() || scanModal.submitting) return;
+    // Receipt No. is optional at the scan (the POS may not have printed one yet);
+    // the server still refuses a receipt already used at this store.
+    if (!scanProgramId.value || !scanPurchaseAmount.value || scanModal.submitting) return;
     if (scanQuantityError.value) return;
     scanModal.submitting = true;
     scanModal.error = null;
@@ -262,14 +305,19 @@ const submitScanAddStamp = async () => {
         const res = await axios.post(route('vendor.campaigns.scan.add-stamp'), {
             token: scanTokenInput.value.trim(),
             stamp_program_id: scanProgramId.value,
+            stamp_type: scanHolidaySlots.value > 0 ? scanStampType.value : 'regular',
             quantity: scanQuantity.value,
             purchase_amount: scanPurchaseAmount.value,
-            receipt_number: scanReceiptNumber.value.trim(),
+            receipt_number: scanReceiptNumber.value.trim() || null,
             note: scanNote.value || null,
         });
-        // The server says how many actually fit, which can be fewer than asked.
+        // The server says what actually happened — fewer stamps than asked past
+        // the card limit, Holiday stamps recorded as Regular — so its sentence
+        // is the toast, not the number the cashier typed.
         const applied = res.data?.applied ?? scanQuantity.value;
-        addToast(`${applied} stamp${applied === 1 ? '' : 's'} added for ${scanModal.customer?.name}.`, 'success');
+        const surprising = res.data?.converted || res.data?.refused;
+        addToast(res.data?.message || `${applied} stamp${applied === 1 ? '' : 's'} added for ${scanModal.customer?.name}.`,
+            surprising ? 'warning' : 'success', surprising ? 10000 : null);
         closeScanModal();
         router.reload({ only: ['cards', 'summary'] });
     } catch (e) {
@@ -284,12 +332,14 @@ const rescan = () => {
     scanModal.step = 'scan';
     scanModal.customer = null;
     scanModal.cards = [];
+    scanModal.cardsHeld = {};
     // scanProgramId stays: several members in a row for one running campaign.
     scanTokenInput.value = '';
     scanPurchaseAmount.value = null;
     scanReceiptNumber.value = '';
     scanNote.value = '';
     scanQuantity.value = 1;
+    scanStampType.value = 'regular';
     nextTick(() => scanTokenInputRef.value?.focus());
 };
 
@@ -297,7 +347,7 @@ const rescan = () => {
  | Add stamps / record purchase / stamp history
  * ------------------------------------------------------------------ */
 const stampModal = reactive({ open: false, card: null });
-const stampForm = useForm({ quantity: 1, purchase_amount: null, receipt_number: '', note: '' });
+const stampForm = useForm({ stamp_type: 'regular', quantity: 1, purchase_amount: null, receipt_number: '', note: '' });
 const stampRemaining = computed(() => {
     const card = stampModal.card;
     if (!card?.program) return 0;
@@ -318,7 +368,7 @@ const submitStamp = () => {
 };
 
 const purchaseModal = reactive({ open: false, card: null });
-const purchaseForm = useForm({ purchase_amount: null, receipt_number: '', note: '' });
+const purchaseForm = useForm({ stamp_type: 'regular', purchase_amount: null, receipt_number: '', note: '' });
 const purchaseProgram = computed(() => purchaseModal.card?.program || null);
 const openPurchaseModal = (card) => {
     purchaseForm.clearErrors();
@@ -332,6 +382,52 @@ const submitPurchase = () => {
         preserveState: true,
         onSuccess: () => { purchaseModal.open = false; purchaseForm.reset(); },
     });
+};
+
+/* ------------------------------------------------------------------ *
+ | Deduct stamps — undo a stamp added by mistake. Recorded as its own
+ | negative entry with the cashier's reason, never by editing history.
+ * ------------------------------------------------------------------ */
+const deductModal = reactive({ open: false, card: null });
+const deductForm = useForm({ stamp_type: 'regular', quantity: 1, reason: '' });
+const deductHolidaySlots = computed(() => holidaySlotsOf(deductModal.card?.program));
+// What the chosen kind of slot holds on this card — the server refuses more.
+const deductAvailable = computed(() => {
+    const card = deductModal.card;
+    if (!card) return 0;
+    const holiday = Number(card.holiday_count || 0);
+    return deductForm.stamp_type === 'holiday' && deductHolidaySlots.value > 0
+        ? holiday
+        : Math.max(0, Number(card.stamps_count || 0) - holiday);
+});
+const deductQuantityError = computed(() => {
+    if (!deductForm.quantity || deductForm.quantity < 1) return 'Enter at least 1 stamp.';
+    if (deductForm.quantity > deductAvailable.value) {
+        const kind = deductHolidaySlots.value > 0 ? (deductForm.stamp_type === 'holiday' ? 'Holiday ' : 'Regular ') : '';
+        return `This card has only ${deductAvailable.value} ${kind}stamp${deductAvailable.value === 1 ? '' : 's'} to deduct.`;
+    }
+    return null;
+});
+const openDeductModal = (card) => {
+    deductForm.clearErrors();
+    deductForm.reset();
+    deductModal.card = card;
+    // Default to the kind the card actually holds, so the form opens valid.
+    if (holidaySlotsOf(card.program) > 0 && Number(card.holiday_count || 0) > 0
+        && Number(card.stamps_count || 0) - Number(card.holiday_count || 0) === 0) {
+        deductForm.stamp_type = 'holiday';
+    }
+    deductModal.open = true;
+};
+const submitDeduct = () => {
+    if (deductQuantityError.value || deductForm.reason.trim().length < 5) return;
+    deductForm
+        .transform((d) => ({ ...d, stamp_type: deductHolidaySlots.value > 0 ? d.stamp_type : 'regular' }))
+        .post(route('vendor.campaigns.cards.deduct-stamps', deductModal.card.id), {
+            preserveScroll: true,
+            preserveState: true,
+            onSuccess: () => { deductModal.open = false; deductForm.reset(); },
+        });
 };
 
 const entriesModal = reactive({ open: false, card: null, entries: [], loading: false });
@@ -779,6 +875,9 @@ const submitRedeem = () => {
                                 </div>
                                 <span class="whitespace-nowrap text-xs font-bold text-slate-600 group-hover:text-emerald-700 transition-colors">{{ card.stamps_count }} / {{ card.program?.stamps_required }}</span>
                             </button>
+                            <p v-if="holidaySlotsOf(card.program) > 0" class="mt-1 text-xs font-bold text-rose-700">
+                                Holiday {{ holidayFilledOf(card) }}/{{ holidaySlotsOf(card.program) }}
+                            </p>
                         </td>
                         <td class="px-6 py-4 text-sm">
                             <span :class="['inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-bold capitalize', statusClass(card.status)]">
@@ -790,6 +889,10 @@ const submitRedeem = () => {
                             <div class="flex justify-end gap-1.5">
                                 <button v-if="card.status === 'active'" type="button" title="Add Stamp" class="rounded-lg p-1.5 text-emerald-600 transition hover:bg-emerald-50 hover:text-emerald-800" @click="openStampModal(card)">
                                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M12 4v16m8-8H4" /></svg>
+                                </button>
+                                <!-- Beside "+" on purpose: it undoes what "+" (or a scan) added by mistake. -->
+                                <button v-if="['active', 'completed'].includes(card.status) && card.stamps_count > 0" type="button" title="Deduct Stamps" class="rounded-lg p-1.5 text-rose-600 transition hover:bg-rose-50 hover:text-rose-800" @click="openDeductModal(card)">
+                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M20 12H4" /></svg>
                                 </button>
                                 <button v-if="card.status === 'active' && card.program?.auto_stamp_amount" type="button" title="Record Purchase" class="rounded-lg p-1.5 text-indigo-600 transition hover:bg-indigo-50 hover:text-indigo-800" @click="openPurchaseModal(card)">
                                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
@@ -917,6 +1020,7 @@ const submitRedeem = () => {
                         <th class="px-6 py-3.5">Company</th>
                         <th class="px-6 py-3.5">Year</th>
                         <th class="px-6 py-3.5">Stamps Required</th>
+                        <th class="px-6 py-3.5">Cards / Customer</th>
                         <th class="px-6 py-3.5">Auto Rule</th>
                         <th class="px-6 py-3.5">Status</th>
                     </tr>
@@ -932,7 +1036,14 @@ const submitRedeem = () => {
                             <span v-else class="text-xs italic text-slate-400">Shared</span>
                         </td>
                         <td class="px-6 py-4 text-sm font-semibold text-slate-700">{{ p.year }}</td>
-                        <td class="px-6 py-4 text-sm font-black text-slate-900">{{ p.stamps_required }}</td>
+                        <td class="px-6 py-4 text-sm font-black text-slate-900">
+                            {{ p.stamps_required }}
+                            <p v-if="holidaySlotsOf(p) > 0" class="mt-0.5 text-xs font-bold text-rose-700">{{ holidaySlotsOf(p) }} Holiday · {{ p.stamps_required - holidaySlotsOf(p) }} Regular</p>
+                        </td>
+                        <td class="px-6 py-4 text-sm font-semibold text-slate-700">
+                            <span v-if="p.max_cards_per_customer">Up to {{ p.max_cards_per_customer }}</span>
+                            <span v-else class="text-slate-400">No limit</span>
+                        </td>
                         <td class="px-6 py-4 text-sm font-medium text-slate-600">
                             <span v-if="p.auto_stamp_amount">1 stamp / ₱{{ formatAmount(p.auto_stamp_amount) }}</span>
                             <span v-else class="text-slate-400">Manual only</span>
@@ -1007,10 +1118,29 @@ const submitRedeem = () => {
                     <div>
                         <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Program <span class="text-rose-500">*</span></label>
                         <Autocomplete v-model="scanProgramId" :options="programOptions" placeholder="Select running campaign..." />
-                        <p v-if="scanProgramId" class="mt-1.5 text-xs font-semibold text-emerald-700">{{ scanRemaining }} stamp(s) left on this card.</p>
-                        <p v-if="scanFullCardAwaitingRedemption" class="mt-1.5 text-xs font-semibold text-amber-700">
-                            This member also has a full card ({{ scanFullCardAwaitingRedemption.stamps_count }} / {{ scanFullCardAwaitingRedemption.program?.stamps_required }}) waiting to be redeemed — it stays claimable. These stamps go on a new card.
+                        <template v-if="scanProgramId">
+                            <p v-for="c in scanOpenCards" :key="c.id" class="mt-1.5 text-xs font-semibold text-emerald-700">
+                                Card {{ c.card_number }}<template v-if="scanCardLimit"> of {{ scanCardLimit }}</template>:
+                                {{ c.stamps_count }} / {{ scanProgram?.stamps_required }} stamps
+                                <template v-if="scanHolidaySlots > 0">
+                                    — <span class="text-rose-700">Holiday {{ c.holiday_filled ?? 0 }}/{{ scanHolidaySlots }}</span>,
+                                    Regular {{ c.regular_filled ?? 0 }}/{{ (scanProgram?.stamps_required ?? 0) - scanHolidaySlots }}
+                                </template>
+                            </p>
+                            <p v-if="!scanOpenCards.length" class="mt-1.5 text-xs font-semibold text-emerald-700">
+                                No open card yet — one will be created automatically<template v-if="scanCardLimit"> (card {{ scanCardsHeld + 1 }} of {{ scanCardLimit }})</template>.
+                            </p>
+                            <p v-if="Number.isFinite(scanRemaining)" class="mt-1 text-xs font-semibold text-slate-500">{{ scanRemaining }} stamp(s) left before the card limit.</p>
+                        </template>
+                        <p v-if="scanFullCardsAwaitingRedemption.length" class="mt-1.5 text-xs font-semibold text-amber-700">
+                            {{ scanFullCardsAwaitingRedemption.length === 1 ? 'A full card is' : `${scanFullCardsAwaitingRedemption.length} full cards are` }} waiting to be redeemed — still claimable, and not stamped further.
                         </p>
+                    </div>
+
+                    <div v-if="scanHolidaySlots > 0">
+                        <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Stamp type <span class="text-rose-500">*</span></label>
+                        <StampTypePicker v-model="scanStampType" />
+                        <p v-if="scanHolidayNotice" class="mt-1.5 text-xs font-semibold text-amber-700">{{ scanHolidayNotice }}</p>
                     </div>
 
                     <div class="grid gap-3 sm:grid-cols-2">
@@ -1025,8 +1155,8 @@ const submitRedeem = () => {
                     </div>
 
                     <div>
-                        <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Receipt No. <span class="text-rose-500">*</span></label>
-                        <input v-model="scanReceiptNumber" type="text" maxlength="100" class="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2 text-sm font-bold text-slate-900 outline-none focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-100" />
+                        <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Receipt No. <span class="font-medium normal-case tracking-normal text-slate-400">(optional)</span></label>
+                        <input v-model="scanReceiptNumber" type="text" maxlength="100" placeholder="Leave blank if there's no receipt yet" class="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2 text-sm font-bold text-slate-900 placeholder:font-medium placeholder:text-slate-400 outline-none focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-100" />
                     </div>
 
                     <div>
@@ -1043,7 +1173,7 @@ const submitRedeem = () => {
                             <button type="button" class="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50" @click="closeScanModal">Cancel</button>
                             <button
                                 type="button"
-                                :disabled="scanModal.submitting || !!scanQuantityError || !scanProgramId || !scanPurchaseAmount || !scanReceiptNumber.trim()"
+                                :disabled="scanModal.submitting || !!scanQuantityError || !scanProgramId || !scanPurchaseAmount"
                                 class="rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-xs font-black uppercase tracking-wider text-white shadow-md shadow-emerald-600/20 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50"
                                 @click="submitScanAddStamp"
                             >
@@ -1088,14 +1218,23 @@ const submitRedeem = () => {
                     <h3 class="text-lg font-black tracking-tight text-slate-900">Add Stamps</h3>
                     <p class="mt-0.5 text-xs font-medium text-slate-500">
                         {{ stampModal.card?.customer?.name }} · {{ stampModal.card?.program?.name }} ·
-                        <span class="font-bold text-emerald-700">{{ stampRemaining }} remaining</span>
+                        <span class="font-bold text-emerald-700">{{ stampRemaining }} remaining on this card</span>
+                        <template v-if="holidaySlotsOf(stampModal.card?.program) > 0">
+                            · <span class="font-bold text-rose-700">Holiday {{ holidayFilledOf(stampModal.card) }}/{{ holidaySlotsOf(stampModal.card?.program) }}</span>
+                        </template>
                     </p>
+                </div>
+                <div v-if="holidaySlotsOf(stampModal.card?.program) > 0">
+                    <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Stamp type <span class="text-rose-500">*</span></label>
+                    <StampTypePicker v-model="stampForm.stamp_type" />
+                    <p v-if="stampForm.errors.stamp_type" class="mt-1 text-xs font-bold text-rose-600">{{ stampForm.errors.stamp_type }}</p>
                 </div>
                 <div class="grid gap-3 sm:grid-cols-2">
                     <div>
                         <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Stamps <span class="text-rose-500">*</span></label>
                         <input v-model.number="stampForm.quantity" type="number" min="1" class="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2 text-sm font-bold text-slate-900 outline-none focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-100" />
                         <p v-if="stampForm.errors.quantity" class="mt-1 text-xs font-bold text-rose-600">{{ stampForm.errors.quantity }}</p>
+                        <p v-else-if="stampForm.quantity > stampRemaining" class="mt-1 text-xs font-medium text-slate-500">Extra stamps continue on the member's next card, up to the campaign's card limit.</p>
                     </div>
                     <div>
                         <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Purchase amount <span class="text-rose-500">*</span></label>
@@ -1121,6 +1260,63 @@ const submitRedeem = () => {
             </div>
         </Modal>
 
+        <!-- Deduct Stamps Modal -->
+        <Modal :show="deductModal.open" max-width="lg" :closeable="false" @close="deductModal.open = false">
+            <div class="space-y-4 p-6 sm:p-7">
+                <div class="border-b border-slate-100 pb-3">
+                    <h3 class="text-lg font-black tracking-tight text-slate-900">Deduct Stamps</h3>
+                    <p class="mt-0.5 text-xs font-medium text-slate-500">
+                        {{ deductModal.card?.customer?.name }} · {{ deductModal.card?.program?.name }} ·
+                        <span class="font-bold text-slate-700">{{ deductModal.card?.stamps_count }} / {{ deductModal.card?.program?.stamps_required }} stamps</span>
+                        <template v-if="deductHolidaySlots > 0">
+                            · <span class="font-bold text-rose-700">Holiday {{ holidayFilledOf(deductModal.card) }}/{{ deductHolidaySlots }}</span>
+                        </template>
+                    </p>
+                </div>
+
+                <p class="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-800">
+                    Use this only to correct a mistake. The stamps are taken off the member's card, and the
+                    deduction is kept in the card's history with your name and the reason.
+                </p>
+                <p v-if="deductModal.card?.status === 'completed'" class="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-800">
+                    This card is full and waiting to be redeemed. Deducting reopens it, and its redeem code stops working until it is full again.
+                </p>
+
+                <div v-if="deductHolidaySlots > 0">
+                    <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Deduct from <span class="text-rose-500">*</span></label>
+                    <StampTypePicker v-model="deductForm.stamp_type" />
+                    <p v-if="deductForm.errors.stamp_type" class="mt-1 text-xs font-bold text-rose-600">{{ deductForm.errors.stamp_type }}</p>
+                </div>
+
+                <div>
+                    <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Stamps to deduct <span class="text-rose-500">*</span></label>
+                    <input v-model.number="deductForm.quantity" type="number" min="1" :max="Math.max(deductAvailable, 1)" class="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2 text-sm font-bold text-slate-900 outline-none focus:border-rose-500 focus:bg-white focus:ring-4 focus:ring-rose-100" />
+                    <p v-if="deductForm.errors.quantity" class="mt-1 text-xs font-bold text-rose-600">{{ deductForm.errors.quantity }}</p>
+                    <p v-else-if="deductQuantityError" class="mt-1 text-xs font-bold text-rose-600">{{ deductQuantityError }}</p>
+                    <p v-else class="mt-1 text-xs font-medium text-slate-500">Up to {{ deductAvailable }} on this card.</p>
+                </div>
+
+                <div>
+                    <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Reason <span class="text-rose-500">*</span></label>
+                    <textarea v-model="deductForm.reason" rows="2" maxlength="255" placeholder="e.g. Scanned the wrong member · Typed 3 stamps instead of 1 · Should have been Regular" class="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2 text-sm font-medium text-slate-900 placeholder:text-slate-400 outline-none focus:border-rose-500 focus:bg-white focus:ring-4 focus:ring-rose-100"></textarea>
+                    <p v-if="deductForm.errors.reason" class="mt-1 text-xs font-bold text-rose-600">{{ deductForm.errors.reason }}</p>
+                    <p v-else class="mt-1 text-xs font-medium text-slate-500">Required — at least a few words, so anyone reviewing the card knows why.</p>
+                </div>
+
+                <div class="flex justify-end gap-2.5 pt-2">
+                    <button type="button" class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50" @click="deductModal.open = false">Cancel</button>
+                    <button
+                        type="button"
+                        :disabled="deductForm.processing || !!deductQuantityError || deductForm.reason.trim().length < 5"
+                        class="rounded-xl bg-gradient-to-r from-rose-600 to-red-600 px-4 py-2 text-xs font-black uppercase tracking-wider text-white shadow-md shadow-rose-600/20 hover:from-rose-500 hover:to-red-500 disabled:opacity-50"
+                        @click="submitDeduct"
+                    >
+                        {{ deductForm.processing ? 'Saving…' : `Deduct ${deductForm.quantity || ''} ${deductForm.quantity === 1 ? 'Stamp' : 'Stamps'}` }}
+                    </button>
+                </div>
+            </div>
+        </Modal>
+
         <!-- Record Purchase Modal -->
         <Modal :show="purchaseModal.open" max-width="lg" :closeable="false" @close="purchaseModal.open = false">
             <div class="space-y-4 p-6 sm:p-7">
@@ -1129,6 +1325,11 @@ const submitRedeem = () => {
                     <p class="mt-0.5 text-xs font-medium text-slate-500">
                         {{ purchaseModal.card?.customer?.name }} · 1 stamp per ₱{{ formatAmount(purchaseProgram?.auto_stamp_amount) }}
                     </p>
+                </div>
+                <div v-if="holidaySlotsOf(purchaseProgram) > 0">
+                    <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Stamp type <span class="text-rose-500">*</span></label>
+                    <StampTypePicker v-model="purchaseForm.stamp_type" />
+                    <p v-if="purchaseForm.errors.stamp_type" class="mt-1 text-xs font-bold text-rose-600">{{ purchaseForm.errors.stamp_type }}</p>
                 </div>
                 <div>
                     <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-600">Purchase amount <span class="text-rose-500">*</span></label>
@@ -1179,9 +1380,13 @@ const submitRedeem = () => {
                         <tbody class="divide-y divide-slate-100 text-xs text-slate-700">
                             <tr v-for="entry in entriesModal.entries" :key="entry.id" class="hover:bg-slate-50/60">
                                 <td class="px-3.5 py-2.5 font-medium text-slate-500 whitespace-nowrap">{{ formatDateTime(entry.created_at) }}</td>
-                                <td class="px-3.5 py-2.5 font-black text-slate-900">{{ entry.quantity }}</td>
+                                <td class="px-3.5 py-2.5 font-black whitespace-nowrap" :class="entry.quantity < 0 ? 'text-rose-700' : 'text-slate-900'">
+                                    {{ entry.quantity < 0 ? `−${Math.abs(entry.quantity)}` : entry.quantity }}
+                                    <span v-if="entry.stamp_type === 'holiday'" class="ml-1 rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold text-rose-700 ring-1 ring-rose-600/20">Holiday</span>
+                                </td>
                                 <td class="px-3.5 py-2.5 capitalize font-semibold text-slate-800">{{ entry.source }}</td>
-                                <td class="px-3.5 py-2.5 font-bold text-slate-900">₱{{ formatAmount(entry.purchase_amount) }}</td>
+                                <!-- One purchase spread over two cards records its amount once; the other entry has none. -->
+                                <td class="px-3.5 py-2.5 font-bold text-slate-900">{{ entry.purchase_amount ? '₱' + formatAmount(entry.purchase_amount) : '—' }}</td>
                                 <td class="px-3.5 py-2.5 font-medium text-slate-700">{{ entry.receipt_number || '—' }}</td>
                                 <td class="px-3.5 py-2.5 font-medium text-slate-700">{{ entry.store?.code || '—' }}</td>
                                 <td class="px-3.5 py-2.5 text-slate-600">{{ actorName(entry) }}</td>
