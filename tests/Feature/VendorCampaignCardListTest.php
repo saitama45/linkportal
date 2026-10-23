@@ -71,6 +71,7 @@ class VendorCampaignCardListTest extends TestCase
             $table->integer('holiday_stamps')->default(0);
             $table->integer('max_cards_per_customer')->nullable();
             $table->decimal('auto_stamp_amount', 12, 2)->nullable();
+            $table->boolean('is_active')->default(true);
             $table->timestamps();
         });
         Schema::create('stamp_cards', function (Blueprint $table) {
@@ -250,6 +251,28 @@ class VendorCampaignCardListTest extends TestCase
             ->where('cards.0.store.code', 'B')
             ->where('summary.active_cards', 1)
             ->where('summary.total_amount', fn ($amount) => (float) $amount === 150.0));
+    }
+
+    /**
+     * "Card 2 of 3" on each row, so the row's Holiday 1/4 reads as that card's
+     * slots. Numbered over all the member's cards for the program — the
+     * redeemed one and the one at another store count too — and per member.
+     */
+    public function test_each_listed_card_says_which_of_the_members_cards_it_is(): void
+    {
+        $member = $this->member('Regular');
+        $this->redeemedAt($this->store, $this->cardAt($this->store, $member));
+        $this->cardAt($this->otherStore, $member, 'completed');
+        $third = $this->cardAt($this->store, $member);
+        $someoneElse = $this->cardAt($this->store, $this->member('Other'));
+
+        $this->campaigns($this->cashier)->assertInertia(fn (AssertableInertia $page) => $page
+            ->has('cards', 3)
+            ->where('cards.0.id', $someoneElse->id)
+            ->where('cards.0.card_number', 1)
+            ->where('cards.1.id', $third->id)
+            ->where('cards.1.card_number', 3)
+            ->where('cards.2.card_number', 1));
     }
 
     public function test_the_issuing_store_keeps_the_card_but_not_the_other_stores_sale(): void

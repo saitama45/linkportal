@@ -80,6 +80,21 @@ class CampaignController extends Controller
                 'program:id,name,stamps_required,holiday_stamps,max_cards_per_customer,auto_stamp_amount',
                 'store:id,code,name',
             ])
+                ->select('stamp_cards.*')
+                // Which of the member's cards for the program this row is
+                // ("Card 2 of 3"), counted over all of them — redeemed ones and
+                // those at other stores included — the way openCardsForScan
+                // numbers them, so a row's Holiday 1/4 reads as this card's.
+                ->addSelect([
+                    'card_number' => StampCard::query()
+                        ->from('stamp_cards as sibling')
+                        ->selectRaw('COUNT(*)')
+                        ->whereColumn('sibling.customer_id', 'stamp_cards.customer_id')
+                        ->whereColumn('sibling.stamp_program_id', 'stamp_cards.stamp_program_id')
+                        ->whereColumn('sibling.id', '<=', 'stamp_cards.id'),
+                ])
+                // SQL Server hands the count back as a string.
+                ->withCasts(['card_number' => 'integer'])
                 ->where($this->cardsOfStore($storeId))
                 ->orderByDesc('id')
                 ->get(),
@@ -847,6 +862,14 @@ class CampaignController extends Controller
         if (! $inScope) {
             throw ValidationException::withMessages([
                 'stamp_program_id' => 'That program is not available at this store.',
+            ]);
+        }
+
+        // The scan dropdown lists running campaigns only; this holds a page
+        // left open after the hub switched the program off to the same rule.
+        if (! StampProgram::whereKey($programId)->where('is_active', true)->exists()) {
+            throw ValidationException::withMessages([
+                'stamp_program_id' => 'That campaign is no longer running. Reload the page to see the current campaigns.',
             ]);
         }
     }

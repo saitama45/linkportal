@@ -67,6 +67,7 @@ class VendorCampaignReceiptTest extends TestCase
             $table->integer('holiday_stamps')->default(0);
             $table->integer('max_cards_per_customer')->nullable();
             $table->decimal('auto_stamp_amount', 12, 2)->nullable();
+            $table->boolean('is_active')->default(true);
             $table->timestamps();
         });
         Schema::create('stamp_cards', function (Blueprint $table) {
@@ -289,6 +290,19 @@ class VendorCampaignReceiptTest extends TestCase
 
         $this->assertSame(2, StampEntry::whereNull('receipt_number')->count());
         $this->assertSame(2, StampCard::sole()->stamps_count);
+    }
+
+    /** A campaign switched off in the hub can't be stamped from a page left open. */
+    public function test_a_scan_against_an_inactive_campaign_is_refused(): void
+    {
+        $this->program->update(['is_active' => false]);
+
+        $this->scan($this->cashier, $this->member('First'), 'OR-8001')
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('stamp_program_id');
+
+        $this->assertSame(0, StampCard::count());
+        $this->assertSame(0, StampEntry::count());
     }
 
     public function test_a_receipt_given_at_the_scan_is_still_once_per_store(): void

@@ -122,8 +122,19 @@ const programOptions = computed(() => props.programs
 // Holiday slots are part of a card's stamps, not extra (StampAllocator), and a
 // program edited mid-campaign can leave a card with more holiday stamps than
 // slots — those count as regular, so clamp for display the same way.
+// Same slot arithmetic as StampCard::holidayFilled/regularFilled, so the two
+// always add up to the card's stamps and match what the scan modal shows.
 const holidaySlotsOf = (program) => Math.max(0, Math.min(Number(program?.holiday_stamps || 0), Number(program?.stamps_required || 0)));
-const holidayFilledOf = (card) => Math.min(Number(card?.holiday_count || 0), holidaySlotsOf(card?.program));
+const regularSlotsOf = (program) => Number(program?.stamps_required || 0) - holidaySlotsOf(program);
+const regularCountOf = (card) => Math.max(0, Number(card?.stamps_count || 0) - Number(card?.holiday_count || 0));
+const holidayFilledOf = (card) => {
+    const overflow = Math.max(0, regularCountOf(card) - regularSlotsOf(card?.program));
+    return holidaySlotsOf(card?.program) - Math.max(0, holidaySlotsOf(card?.program) - Number(card?.holiday_count || 0) - overflow);
+};
+const regularFilledOf = (card) => {
+    const overflow = Math.max(0, Number(card?.holiday_count || 0) - holidaySlotsOf(card?.program));
+    return regularSlotsOf(card?.program) - Math.max(0, regularSlotsOf(card?.program) - regularCountOf(card) - overflow);
+};
 
 /* ------------------------------------------------------------------ *
  | Formatting helpers
@@ -862,7 +873,13 @@ const submitRedeem = () => {
                 <template #body="{ data }">
                     <tr v-for="card in data" :key="card.id" class="transition-colors hover:bg-slate-50/60">
                         <td class="px-6 py-4 text-sm font-bold text-slate-900">{{ card.customer?.name || '—' }}</td>
-                        <td class="px-6 py-4 text-sm font-medium text-slate-700">{{ card.program?.name || '—' }}</td>
+                        <td class="px-6 py-4 text-sm font-medium text-slate-700">
+                            {{ card.program?.name || '—' }}
+                            <!-- A member can hold several cards for one program; say which one this row is. -->
+                            <span v-if="card.card_number" class="block text-[11px] font-semibold text-slate-400">
+                                Card {{ card.card_number }}<template v-if="card.program?.max_cards_per_customer"> of {{ card.program.max_cards_per_customer }}</template>
+                            </span>
+                        </td>
                         <td class="whitespace-nowrap px-6 py-4 text-xs font-medium text-slate-500">
                             {{ formatDateTime(card.created_at) }}
                             <!-- A card opened at another branch and stamped here: say so, or the row looks misfiled. -->
@@ -875,8 +892,10 @@ const submitRedeem = () => {
                                 </div>
                                 <span class="whitespace-nowrap text-xs font-bold text-slate-600 group-hover:text-emerald-700 transition-colors">{{ card.stamps_count }} / {{ card.program?.stamps_required }}</span>
                             </button>
-                            <p v-if="holidaySlotsOf(card.program) > 0" class="mt-1 text-xs font-bold text-rose-700">
-                                Holiday {{ holidayFilledOf(card) }}/{{ holidaySlotsOf(card.program) }}
+                            <!-- The split of this card's own stamps, so "Holiday 1/4" can't be read as a count of cards. -->
+                            <p v-if="holidaySlotsOf(card.program) > 0" class="mt-1 whitespace-nowrap text-xs font-semibold text-slate-500">
+                                <span class="font-bold text-rose-700">Holiday {{ holidayFilledOf(card) }}/{{ holidaySlotsOf(card.program) }}</span>
+                                · Regular {{ regularFilledOf(card) }}/{{ regularSlotsOf(card.program) }}
                             </p>
                         </td>
                         <td class="px-6 py-4 text-sm">
